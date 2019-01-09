@@ -129,8 +129,11 @@ int SyncRes::beginResolve(const DNSName &qname, const QType &qtype, uint16_t qcl
     return 0;                          // so do check before updating counters (we do now)
   }
 
-  if( (qtype.getCode() == QType::AXFR) || (qtype.getCode() == QType::IXFR) || (qtype.getCode() == QType::RRSIG) || (qtype.getCode() == QType::NSEC3))
+  auto qtypeCode = qtype.getCode();
+  /* rfc6895 section 3.1 */
+  if ((qtypeCode >= 128 && qtypeCode <= 254) || qtypeCode == QType::RRSIG || qtypeCode == QType::NSEC3 || qtypeCode == QType::OPT || qtypeCode == 65535) {
     return -1;
+  }
 
   if(qclass==QClass::ANY)
     qclass=QClass::IN;
@@ -491,7 +494,7 @@ int SyncRes::asyncresolveWrapper(const ComboAddress& ip, bool ednsMANDATORY, con
       ret = d_asyncResolve(ip, sendQname, type, doTCP, sendRDQuery, EDNSLevel, now, srcmask, ctx, res, chained);
     }
     else {
-      ret=asyncresolve(ip, sendQname, type, doTCP, sendRDQuery, EDNSLevel, now, srcmask, ctx, d_outgoingProtobufServer, luaconfsLocal->outgoingProtobufExportConfig.exportTypes, res, chained);
+      ret=asyncresolve(ip, sendQname, type, doTCP, sendRDQuery, EDNSLevel, now, srcmask, ctx, d_outgoingProtobufServers, luaconfsLocal->outgoingProtobufExportConfig.exportTypes, res, chained);
     }
     if(ret < 0) {
       return ret; // transport error, nothing to learn here
@@ -501,7 +504,7 @@ int SyncRes::asyncresolveWrapper(const ComboAddress& ip, bool ednsMANDATORY, con
       return ret;
     }
     else if(mode==EDNSStatus::UNKNOWN || mode==EDNSStatus::EDNSOK || mode == EDNSStatus::EDNSIGNORANT ) {
-      if(res->d_validpacket && res->d_rcode == RCode::FormErr)  {
+      if(res->d_validpacket && !res->d_haveEDNS && res->d_rcode == RCode::FormErr)  {
 	//	cerr<<"Downgrading to NOEDNS because of "<<RCode::to_s(res->d_rcode)<<" for query to "<<ip.toString()<<" for '"<<domain<<"'"<<endl;
         mode = EDNSStatus::NOEDNS;
         continue;
@@ -2120,7 +2123,7 @@ RCode::rcodes_ SyncRes::updateCacheFromRecords(unsigned int depth, LWResult& lwr
        set the TC bit solely because these RRSIG RRs didn't fit."
     */
     bool isAA = lwr.d_aabit && i->first.place != DNSResourceRecord::ADDITIONAL;
-    if (isAA && isCNAMEAnswer && i->first.place == DNSResourceRecord::ANSWER && (i->first.type != QType::CNAME || i->first.name != qname)) {
+    if (isAA && isCNAMEAnswer && (i->first.place != DNSResourceRecord::ANSWER || i->first.type != QType::CNAME || i->first.name != qname)) {
       /*
         rfc2181 states:
         Note that the answer section of an authoritative answer normally
@@ -2267,7 +2270,7 @@ bool SyncRes::processRecords(const std::string& prefix, const DNSName& qname, co
       */
       if(!wasVariable() && newtarget.empty()) {
         t_sstorage.negcache.add(ne);
-        if(s_rootNXTrust && ne.d_auth.isRoot() && auth.isRoot()) {
+        if(s_rootNXTrust && ne.d_auth.isRoot() && auth.isRoot() && lwr.d_aabit) {
           ne.d_name = ne.d_name.getLastLabel();
           t_sstorage.negcache.add(ne);
         }

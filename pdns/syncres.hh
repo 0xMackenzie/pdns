@@ -72,11 +72,8 @@ typedef map<
 template<class Thing> class Throttle : public boost::noncopyable
 {
 public:
-  Throttle()
+  Throttle() : d_limit(3), d_ttl(60), d_last_clean(time(nullptr))
   {
-    d_limit=3;
-    d_ttl=60;
-    d_last_clean=time(0);
   }
 
   struct entry
@@ -659,9 +656,9 @@ public:
     d_initialRequestId = initialRequestId;
   }
 
-  void setOutgoingProtobufServer(std::shared_ptr<RemoteLogger>& server)
+  void setOutgoingProtobufServers(std::shared_ptr<std::vector<std::unique_ptr<RemoteLogger>>>& servers)
   {
-    d_outgoingProtobufServer = server;
+    d_outgoingProtobufServers = servers;
   }
 #endif
 
@@ -804,7 +801,7 @@ private:
   ostringstream d_trace;
   shared_ptr<RecursorLua4> d_pdl;
   boost::optional<Netmask> d_outgoingECSNetwork;
-  std::shared_ptr<RemoteLogger> d_outgoingProtobufServer{nullptr};
+  std::shared_ptr<std::vector<std::unique_ptr<RemoteLogger>>> d_outgoingProtobufServers{nullptr};
 #ifdef HAVE_PROTOBUF
   boost::optional<const boost::uuids::uuid&> d_initialRequestId;
 #endif
@@ -933,6 +930,8 @@ struct RecursorStats
   std::atomic<uint64_t> emptyQueriesCount;
   time_t startupTime;
   std::atomic<uint64_t> dnssecQueries;
+  std::atomic<uint64_t> dnssecAuthenticDataQueries;
+  std::atomic<uint64_t> dnssecCheckDisabledQueries;
   unsigned int maxMThreadStackUsage;
   std::atomic<uint64_t> dnssecValidations; // should be the sum of all dnssecResult* stats
   std::map<vState, std::atomic<uint64_t> > dnssecResults;
@@ -967,7 +966,7 @@ private:
 class ImmediateServFailException
 {
 public:
-  ImmediateServFailException(string r){reason=r;};
+  ImmediateServFailException(string r) : reason(r) {};
 
   string reason; //! Print this to tell the user what went wrong
 };

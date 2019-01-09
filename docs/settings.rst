@@ -177,6 +177,20 @@ Also AXFR a zone from a master with a lower serial.
 
 Seconds to store packets in the :ref:`packet-cache`.
 
+.. _setting-carbon-namespace:
+
+``carbon-namespace``
+--------------------
+
+-  String
+-  Default: pdns
+
+.. versionadded:: 4.2.0
+
+Set the namespace or first string of the metric key. Be careful not to include
+any dots in this setting, unless you know what you are doing.
+See :ref:`metricscarbon`
+
 .. _setting-carbon-ourname:
 
 ``carbon-ourname``
@@ -188,6 +202,20 @@ Seconds to store packets in the :ref:`packet-cache`.
 If sending carbon updates, if set, this will override our hostname. Be
 careful not to include any dots in this setting, unless you know what
 you are doing. See :ref:`metricscarbon`
+
+.. _setting-carbon-instance:
+
+``carbon-instance``
+-------------------
+
+-  String
+-  Default: auth
+
+.. versionadded:: 4.2.0
+
+Set the instance or third string of the metric key. Be careful not to include
+any dots in this setting, unless you know what you are doing.
+See :ref:`metricscarbon`
 
 .. _setting-carbon-server:
 
@@ -272,6 +300,20 @@ Debugging switch - don't use.
 
 Operate as a daemon.
 
+.. _setting-default-api-rectify:
+
+``default-api-rectify``
+-----------------------
+-  Boolean
+-  Default: yes
+
+.. versionadded:: 4.2.0
+
+The value of :ref:`metadata-api-rectify` if it is not set on the zone.
+
+.. note::
+  Pre 4.2.0 the default was always no.
+
 .. _setting-default-ksk-algorithms:
 .. _setting-default-ksk-algorithm:
 
@@ -288,17 +330,13 @@ The algorithm that should be used for the KSK when running
 :doc:`pdnsutil secure-zone <manpages/pdnsutil.1>` or using the :doc:`Zone API endpoint <http-api/cryptokey>`
 to enable DNSSEC. Must be one of:
 
-* rsamd5
-* dh
-* dsa
-* ecc
 * rsasha1
 * rsasha256
 * rsasha512
-* ecc-gost
 * ecdsa256 (ECDSA P-256 with SHA256)
 * ecdsa384 (ECDSA P-384 with SHA384)
 * ed25519
+* ed448
 
 .. note::
   Actual supported algorithms depend on the crypto-libraries
@@ -384,17 +422,13 @@ The algorithm that should be used for the ZSK when running
 :doc:`pdnsutil secure-zone <manpages/pdnsutil.1>` or using the :doc:`Zone API endpoint <http-api/cryptokey>`
 to enable DNSSEC. Must be one of:
 
-* rsamd5
-* dh
-* dsa
-* ecc
 * rsasha1
 * rsasha256
 * rsasha512
-* ecc-gost
 * ecdsa256 (ECDSA P-256 with SHA256)
 * ecdsa384 (ECDSA P-384 with SHA384)
 * ed25519
+* ed448
 
 .. note::
   Actual supported algorithms depend on the crypto-libraries
@@ -702,15 +736,15 @@ Disable this if the process supervisor timestamps these lines already.
 .. note::
   The systemd unit file supplied with the source code already disables timestamp printing
 
-.. _setting-lua-record-exec-limit:
+.. _setting-lua-records-exec-limit:
 
-``lua-record-exec-limit``
+``lua-records-exec-limit``
 -----------------------------
 
 -  Integer
 -  Default: 1000
 
-Limit LUA record scripts to ``lua-record-exec-limit`` instructions.
+Limit LUA records scripts to ``lua-records-exec-limit`` instructions.
 Setting this to any value less than or equal to 0 will set no limit.
 
 .. _setting-non-local-bind:
@@ -911,7 +945,7 @@ situation hopeless and respawn.
 -------------------------------
 
 -  Integer
--  Default: 2^64 (on 64-bit systems)
+-  Default: 2^31-1 (on most systems), 2^63-1 (on ILP64 systems)
 
 Maximum number of signatures cache entries
 
@@ -1117,6 +1151,9 @@ To notify all IP addresses apart from the 192.168.0.0/24 subnet use the followin
 
 ``out-of-zone-additional-processing``
 -------------------------------------
+
+.. versionchanged:: 4.2.0
+  This setting has been removed.
 
 -  Boolean
 -  Default: yes

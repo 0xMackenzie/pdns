@@ -37,7 +37,13 @@ BuildRequires: boost148-program-options
 %endif
 
 Requires(pre): shadow-utils
+%ifarch aarch64
+BuildRequires: lua-devel
+%define lua_implementation lua
+%else
 BuildRequires: luajit-devel
+%define lua_implementation luajit
+%endif
 BuildRequires: libsodium-devel
 BuildRequires: bison
 BuildRequires: openssl-devel
@@ -160,6 +166,7 @@ Group: System Environment/Daemons
 Requires: %{name}%{?_isa} = %{version}-%{release}
 BuildRequires: yaml-cpp-devel
 BuildRequires: geoip-devel
+BuildRequires: libmaxminddb-devel
 %global backends %{backends} geoip
 
 %description backend-geoip
@@ -190,7 +197,7 @@ This package contains the ixfrdist program.
 %if 0%{?rhel} == 6
 %setup -n %{name}-%{getenv:BUILDER_VERSION}
 %else
-%autosetup -p1 -n %{name}-%{getenv:BUILDER_VERSION} 
+%autosetup -p1 -n %{name}-%{getenv:BUILDER_VERSION}
 %endif
 
 %build
@@ -202,10 +209,10 @@ export CPPFLAGS="-DLDAP_DEPRECATED"
   --disable-dependency-tracking \
   --disable-silent-rules \
   --with-modules='' \
-  --with-lua=luajit \
+  --with-lua=%{lua_implementation} \
   --with-dynmodules='%{backends} random' \
   --enable-tools \
-  --enable-libsodium \
+  --with-libsodium \
   --enable-unit-tests \
 %if 0%{?rhel} >= 7
   --enable-lua-records \
@@ -270,7 +277,7 @@ exit 0
 %if 0%{?rhel} >= 7
 %systemd_preun pdns.service
 %else
-if [ \$1 -eq 0 ]; then
+if [ $1 -eq 0 ]; then
   /sbin/service pdns stop >/dev/null 2>&1 || :
   /sbin/chkconfig --del pdns
 fi
@@ -280,7 +287,7 @@ fi
 %if 0%{?rhel} >= 7
 %systemd_postun_with_restart pdns.service
 %else
-if [ \$1 -ge 1 ]; then
+if [ $1 -ge 1 ]; then
   /sbin/service pdns condrestart >/dev/null 2>&1 || :
 fi
 %endif

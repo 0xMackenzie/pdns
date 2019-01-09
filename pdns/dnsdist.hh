@@ -35,6 +35,7 @@
 #include <boost/variant.hpp>
 
 #include "bpf-filter.hh"
+#include "capabilities.hh"
 #include "dnscrypt.hh"
 #include "dnsdist-cache.hh"
 #include "dnsdist-dynbpf.hh"
@@ -51,7 +52,7 @@
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
 
-void* carbonDumpThread();
+void carbonDumpThread();
 uint64_t uptimeOfProcess(const std::string& str);
 
 extern uint16_t g_ECSSourcePrefixV4;
@@ -111,7 +112,7 @@ struct DNSResponse : DNSQuestion
 class DNSAction
 {
 public:
-  enum class Action { Drop, Nxdomain, Refused, Spoof, Allow, HeaderModify, Pool, Delay, Truncate, ServFail, None, NoOp };
+  enum class Action { Drop, Nxdomain, Refused, Spoof, Allow, HeaderModify, Pool, Delay, Truncate, ServFail, None, NoOp, NoRecurse };
   static std::string typeToString(const Action& action)
   {
     switch(action) {
@@ -138,6 +139,8 @@ public:
     case Action::None:
     case Action::NoOp:
       return "Do nothing";
+    case Action::NoRecurse:
+      return "Set rd=0";
     }
 
     return "Unknown";
@@ -227,6 +230,7 @@ struct DNSDistStats
   stat_t cacheHits{0};
   stat_t cacheMisses{0};
   stat_t latency0_1{0}, latency1_10{0}, latency10_50{0}, latency50_100{0}, latency100_1000{0}, latencySlow{0};
+  stat_t securityStatus{0};
 
   double latencyAvg100{0}, latencyAvg1000{0}, latencyAvg10000{0}, latencyAvg1000000{0};
   typedef std::function<uint64_t(const std::string&)> statfunction_t;
@@ -267,7 +271,8 @@ struct DNSDistStats
     {"cpu-sys-msec", getCPUTimeSystem},
     {"fd-usage", getOpenFileDescriptors},
     {"dyn-blocked", &dynBlocked},
-    {"dyn-block-nmg-size", [](const std::string&) { return g_dynblockNMG.getLocal()->size(); }}
+    {"dyn-block-nmg-size", [](const std::string&) { return g_dynblockNMG.getLocal()->size(); }},
+    {"security-status", &securityStatus}
   };
 };
 
@@ -279,9 +284,7 @@ enum class PrometheusMetricType: int {
 
 // Keeps additional information about metrics
 struct MetricDefinition {
-  MetricDefinition(PrometheusMetricType prometheusType, const std::string& description) {
-    this->prometheusType = prometheusType;
-    this->description = description;
+  MetricDefinition(PrometheusMetricType _prometheusType, const std::string& _description): description(_description), prometheusType(_prometheusType) {
   }
  
   MetricDefinition() = default;
@@ -357,6 +360,7 @@ struct MetricDefinitionStorage {
     { "fd-usage",               MetricDefinition(PrometheusMetricType::gauge,   "Number of currently used file descriptors")},
     { "dyn-blocked",            MetricDefinition(PrometheusMetricType::counter, "Number of queries dropped because of a dynamic block")},
     { "dyn-block-nmg-size",     MetricDefinition(PrometheusMetricType::gauge,   "Number of dynamic blocks entries") },
+    { "security-status",        MetricDefinition(PrometheusMetricType::gauge,   "Security status of this software. 0=unknown, 1=OK, 2=upgrade recommended, 3=upgrade mandatory") },
   };
 };
 
@@ -410,7 +414,7 @@ public:
   {
   }
 
-  BasicQPSLimiter(unsigned int rate, unsigned int burst): d_tokens(burst)
+  BasicQPSLimiter(unsigned int burst): d_tokens(burst)
   {
     d_prev.start();
   }
@@ -451,7 +455,7 @@ public:
   {
   }
 
-  QPSLimiter(unsigned int rate, unsigned int burst): BasicQPSLimiter(rate, burst), d_rate(rate), d_burst(burst), d_passthrough(false)
+  QPSLimiter(unsigned int rate, unsigned int burst): BasicQPSLimiter(burst), d_rate(rate), d_burst(burst), d_passthrough(false)
   {
     d_prev.start();
   }
@@ -536,6 +540,7 @@ struct IDState
   bool ecsAdded{false};
   bool skipCache{false};
   bool destHarvested{false}; // if true, origDest holds the original dest addr, otherwise the listening addr
+  bool dnssecOK{false};
 };
 
 typedef std::unordered_map<string, unsigned int> QueryCountRecords;
@@ -758,7 +763,7 @@ using servers_t =vector<std::shared_ptr<DownstreamState>>;
 
 template <class T> using NumberedVector = std::vector<std::pair<unsigned int, T> >;
 
-void* responderThread(std::shared_ptr<DownstreamState> state);
+void responderThread(std::shared_ptr<DownstreamState> state);
 extern std::mutex g_luamutex;
 extern LuaContext g_lua;
 extern std::string g_outputBuffer; // locking for this is ok, as locked by g_luamutex
@@ -882,7 +887,9 @@ void removeServerFromPool(pools_t& pools, const string& poolName, std::shared_pt
 struct CarbonConfig
 {
   ComboAddress server;
+  std::string namespace_name;
   std::string ourname;
+  std::string instance_name;
   unsigned int interval;
 };
 
@@ -896,6 +903,7 @@ struct DNSDistRuleAction
   std::shared_ptr<DNSRule> d_rule;
   std::shared_ptr<DNSAction> d_action;
   boost::uuids::uuid d_id;
+  uint64_t d_creationOrder;
 };
 
 struct DNSDistResponseRuleAction
@@ -903,6 +911,7 @@ struct DNSDistResponseRuleAction
   std::shared_ptr<DNSRule> d_rule;
   std::shared_ptr<DNSResponseAction> d_action;
   boost::uuids::uuid d_id;
+  uint64_t d_creationOrder;
 };
 
 extern GlobalStateHolder<SuffixMatchTree<DynBlock>> g_dynblockSMT;
@@ -946,6 +955,7 @@ extern uint32_t g_hashperturb;
 extern bool g_useTCPSinglePipe;
 extern std::atomic<uint16_t> g_downstreamTCPCleanupInterval;
 extern size_t g_udpVectorSize;
+extern bool g_preserveTrailingData;
 
 #ifdef HAVE_EBPF
 extern shared_ptr<BPFFilter> g_defaultBPFFilter;
@@ -985,10 +995,20 @@ std::shared_ptr<DownstreamState> whashed(const NumberedServerVector& servers, co
 std::shared_ptr<DownstreamState> chashed(const NumberedServerVector& servers, const DNSQuestion* dq);
 std::shared_ptr<DownstreamState> roundrobin(const NumberedServerVector& servers, const DNSQuestion* dq);
 
-void dnsdistWebserverThread(int sock, const ComboAddress& local, const string& password, const string& apiKey, const boost::optional<std::map<std::string, std::string> >&);
-bool getMsgLen32(int fd, uint32_t* len);
-bool putMsgLen32(int fd, uint32_t len);
-void* tcpAcceptorThread(void* p);
+struct WebserverConfig
+{
+  std::string password;
+  std::string apiKey;
+  boost::optional<std::map<std::string, std::string> > customHeaders;
+  std::mutex lock;
+};
+
+void setWebserverAPIKey(const boost::optional<std::string> apiKey);
+void setWebserverPassword(const std::string& password);
+void setWebserverCustomHeaders(const boost::optional<std::map<std::string, std::string> > customHeaders);
+
+void dnsdistWebserverThread(int sock, const ComboAddress& local);
+void tcpAcceptorThread(void* p);
 
 void setLuaNoSideEffect(); // if nothing has been declared, set that there are no side effects
 void setLuaSideEffect();   // set to report a side effect, cancelling all _no_ side effect calls
@@ -1011,6 +1031,8 @@ int handleDNSCryptQuery(char* packet, uint16_t len, std::shared_ptr<DNSCryptQuer
 #endif
 
 bool addXPF(DNSQuestion& dq, uint16_t optionCode);
+
+uint16_t getRandomDNSID();
 
 #include "dnsdist-snmp.hh"
 
