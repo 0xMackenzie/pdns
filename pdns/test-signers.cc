@@ -7,7 +7,6 @@
 #include <boost/assign/list_of.hpp>
 
 #include <boost/tuple/tuple.hpp>
-#include <boost/scoped_ptr.hpp>
 
 #include "base64.hh"
 #include "dnsseckeeper.hh"
@@ -28,7 +27,7 @@ static const struct signerParams
   std::string name;
   std::string rfcMsgDump;
   std::string rfcB64Signature;
-  unsigned int bits;
+  int bits;
   uint16_t flags;
   uint16_t rfcFlags;
   uint8_t algorithm;
@@ -182,17 +181,17 @@ BOOST_AUTO_TEST_CASE(test_generic_signers)
     BOOST_CHECK_EQUAL(drc.getZoneRepresentation(), signer.zoneRepresentation);
 
     DNSName name(signer.name);
-    auto ds1 = makeDSFromDNSKey(name, drc, DNSSECKeeper::SHA1);
+    auto ds1 = makeDSFromDNSKey(name, drc, DNSSECKeeper::DIGEST_SHA1);
     if (!signer.dsSHA1.empty()) {
       BOOST_CHECK_EQUAL(ds1.getZoneRepresentation(), signer.dsSHA1);
     }
 
-    auto ds2 = makeDSFromDNSKey(name, drc, DNSSECKeeper::SHA256);
+    auto ds2 = makeDSFromDNSKey(name, drc, DNSSECKeeper::DIGEST_SHA256);
     if (!signer.dsSHA256.empty()) {
       BOOST_CHECK_EQUAL(ds2.getZoneRepresentation(), signer.dsSHA256);
     }
 
-    auto ds4 = makeDSFromDNSKey(name, drc, DNSSECKeeper::SHA384);
+    auto ds4 = makeDSFromDNSKey(name, drc, DNSSECKeeper::DIGEST_SHA384);
     if (!signer.dsSHA384.empty()) {
       BOOST_CHECK_EQUAL(ds4.getZoneRepresentation(), signer.dsSHA384);
     }

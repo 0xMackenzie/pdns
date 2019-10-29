@@ -15,3 +15,9 @@ These are some functions that don't really have a place in one of the other cate
 .. function:: getRecursorThreadId() -> int
 
   returns an unsigned integer identifying the thread handling the current request.
+
+.. function:: pdnsrandom([upper_bound])
+
+  Get a random number.
+
+  :param int upper_bound: The upper bound. You will get a random number below this upper bound.

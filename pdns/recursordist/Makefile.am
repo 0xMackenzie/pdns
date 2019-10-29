@@ -18,6 +18,11 @@ AM_CXXFLAGS += \
 	-DNODCACHEDIR=\"$(nodcachedir)\"
 endif
 
+if FSTRM
+AM_CPPFLAGS += \
+	$(FSTRM_CFLAGS)
+endif
+
 AM_LDFLAGS = \
 	$(PROGRAM_LDFLAGS) \
 	$(THREADFLAGS)
@@ -59,6 +64,7 @@ EXTRA_DIST = \
 	NOTICE \
 	opensslsigners.hh opensslsigners.cc \
 	portsmplexer.cc \
+	dnstap.proto dnstap.cc dnstap.hh fstrm_logger.cc fstrm_logger.hh rec-dnstap.hh \
 	rrd/* \
 	html incfiles \
 	test_libcrypto \
@@ -94,6 +100,7 @@ pdns_recursor_SOURCES = \
 	base64.cc base64.hh \
 	cachecleaner.hh \
 	capabilities.cc capabilities.hh \
+	circular_buffer.hh \
 	comment.hh \
 	dns.hh dns.cc \
 	dns_random.hh dns_random.cc \
@@ -109,6 +116,7 @@ pdns_recursor_SOURCES = \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc ednssubnet.hh \
 	filterpo.cc filterpo.hh \
+	fstrm_logger.cc fstrm_logger.hh \
 	gettime.cc gettime.hh \
 	gss_context.cc gss_context.hh \
 	iputils.hh iputils.cc \
@@ -142,7 +150,7 @@ pdns_recursor_SOURCES = \
 	rec-lua-conf.hh rec-lua-conf.cc \
 	rec-protobuf.cc rec-protobuf.hh \
 	rec-snmp.hh rec-snmp.cc \
-	rec_channel.cc rec_channel.hh \
+	rec_channel.cc rec_channel.hh rec_metrics.hh \
 	rec_channel_rec.cc \
 	recpacketcache.cc recpacketcache.hh \
 	recursor_cache.cc recursor_cache.hh \
@@ -154,8 +162,8 @@ pdns_recursor_SOURCES = \
 	root-addresses.hh \
 	root-dnssec.hh \
 	rpzloader.cc rpzloader.hh \
-	secpoll-recursor.cc \
-	secpoll-recursor.hh \
+	secpoll-recursor.cc secpoll-recursor.hh \
+	secpoll.cc secpoll.hh \
 	sholder.hh \
 	sillyrecords.cc \
 	snmp-agent.hh snmp-agent.cc \
@@ -168,6 +176,7 @@ pdns_recursor_SOURCES = \
 	ueberbackend.hh \
 	unix_utility.cc \
 	utility.hh \
+	uuid-utils.hh uuid-utils.cc \
 	validate.cc validate.hh validate-recursor.cc validate-recursor.hh \
 	version.cc version.hh \
 	webserver.cc webserver.hh \
@@ -210,6 +219,7 @@ testrunner_SOURCES = \
 	arguments.cc \
 	base32.cc \
 	base64.cc base64.hh \
+	circular_buffer.hh \
 	dns.cc dns.hh \
 	dns_random.cc dns_random.hh \
 	dnslabeltext.cc \
@@ -235,6 +245,7 @@ testrunner_SOURCES = \
 	nsecrecords.cc \
 	pdnsexception.hh \
 	opensslsigners.cc opensslsigners.hh \
+	pollmplexer.cc \
 	protobuf.cc protobuf.hh \
 	qtype.cc qtype.hh \
 	rcpgenerator.cc \
@@ -242,7 +253,10 @@ testrunner_SOURCES = \
 	recpacketcache.cc recpacketcache.hh \
 	recursor_cache.cc recursor_cache.hh \
 	responsestats.cc \
+	rpzloader.cc rpzloader.hh \
+	resolver.hh resolver.cc \
 	root-dnssec.hh \
+	secpoll.cc \
 	sillyrecords.cc \
 	sholder.hh \
 	sstuff.hh \
@@ -258,17 +272,31 @@ testrunner_SOURCES = \
 	test-dnsparser_hh.cc \
 	test-dnsrecords_cc.cc \
 	test-ednsoptions_cc.cc \
+	test-filterpo_cc.cc \
 	test-iputils_hh.cc \
 	test-ixfr_cc.cc \
 	test-misc_hh.cc \
 	test-mtasker.cc \
+	test-mplexer.cc \
 	test-negcache_cc.cc \
 	test-packetcache_hh.cc \
 	test-rcpgenerator_cc.cc \
 	test-recpacketcache_cc.cc \
 	test-recursorcache_cc.cc \
+	test-rpzloader_cc.cc \
+	test-secpoll_cc.cc \
 	test-signers.cc \
+	test-syncres_cc.hh \
 	test-syncres_cc.cc \
+	test-syncres_cc1.cc \
+	test-syncres_cc2.cc \
+	test-syncres_cc3.cc \
+	test-syncres_cc4.cc \
+	test-syncres_cc5.cc \
+	test-syncres_cc6.cc \
+	test-syncres_cc7.cc \
+	test-syncres_cc8.cc \
+	test-syncres_cc9.cc \
 	test-tsig.cc \
 	test-xpf_cc.cc \
 	testrunner.cc \
@@ -334,14 +362,19 @@ endif
 
 if HAVE_FREEBSD
 pdns_recursor_SOURCES += kqueuemplexer.cc
+testrunner_SOURCES += kqueuemplexer.cc
 endif
 
 if HAVE_LINUX
 pdns_recursor_SOURCES += epollmplexer.cc
+testrunner_SOURCES += epollmplexer.cc
 endif
 
 if HAVE_SOLARIS
 pdns_recursor_SOURCES += \
+	devpollmplexer.cc \
+	portsmplexer.cc
+testrunner_SOURCES += \
 	devpollmplexer.cc \
 	portsmplexer.cc
 endif
@@ -351,16 +384,39 @@ if HAVE_PROTOC
 dnsmessage.pb.cc: dnsmessage.proto
 	$(AM_V_GEN)$(PROTOC) --cpp_out=./ $<
 
+if FSTRM
+dnstap.pb.cc: dnstap.proto
+	$(AM_V_GEN)$(PROTOC) -I$(srcdir) --cpp_out=./ $<
+endif
+
+
 BUILT_SOURCES += dnsmessage.pb.cc
 pdns_recursor_LDADD += $(PROTOBUF_LIBS)
 nodist_pdns_recursor_SOURCES = dnsmessage.pb.cc dnsmessage.pb.h
-pdns_recursor.$(OBJEXT): dnsmessage.pb.cc
-
 nodist_testrunner_SOURCES = dnsmessage.pb.cc dnsmessage.pb.h
-testrunner_LDADD += $(PROTOBUF_LIBS)
+
+if FSTRM
+BUILT_SOURCES += dnstap.pb.cc
+pdns_recursor.$(OBJEXT): dnstap.pb.cc dnsmessage.pb.cc
+testrunner$(OBJEXT): dnstap.pb.cc dnsmessage.pb.cc
+nodist_pdns_recursor_SOURCES += dnstap.pb.cc dnstap.pb.h
+nodist_testrunner_SOURCES += dnstap.pb.cc dnstap.pb.h
+else
+pdns_recursor.$(OBJEXT): dnsmessage.pb.cc
 testrunner$(OBJEXT): dnsmessage.pb.cc
+endif
+
+testrunner_LDADD += $(PROTOBUF_LIBS)
 
 endif
+endif
+
+if FSTRM
+pdns_recursor_SOURCES += \
+	dnstap.cc dnstap.hh rec-dnstap.hh
+
+pdns_recursor_LDADD += \
+	$(FSTRM_LIBS)
 endif
 
 rec_control_SOURCES = \
@@ -444,7 +500,46 @@ endif
 
 if HAVE_SYSTEMD
 pdns-recursor.service: pdns-recursor.service.in
-	$(AM_V_GEN)sed -e 's![@]sbindir[@]!$(sbindir)!' < $< > $@
+	$(AM_V_GEN)sed -e 's![@]sbindir[@]!$(sbindir)!' -e 's![@]service_user[@]!$(service_user)!' -e 's![@]service_group[@]!$(service_group)!' < $< > $@
+if !HAVE_SYSTEMD_LOCK_PERSONALITY
+	$(AM_V_GEN)perl -ni -e 'print unless /^LockPersonality/' $@
+endif
+if !HAVE_SYSTEMD_PRIVATE_DEVICES
+	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateDevices/' $@
+endif
+if !HAVE_SYSTEMD_PRIVATE_TMP
+	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateTmp/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_CONTROL_GROUPS
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectControlGroups/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_HOME
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectHome/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_KERNEL_MODULES
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectKernelModules/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_KERNEL_TUNABLES
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectKernelTunables/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_SYSTEM
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectSystem/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_ADDRESS_FAMILIES
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictAddressFamilies/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_NAMESPACES
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictNamespaces/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_REALTIME
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictRealtime/' $@
+endif
+if !HAVE_SYSTEMD_SYSTEM_CALL_ARCHITECTURES
+	$(AM_V_GEN)perl -ni -e 'print unless /^SystemCallArchitectures/' $@
+endif
+if !HAVE_SYSTEMD_SYSTEM_CALL_FILTER
+	$(AM_V_GEN)perl -ni -e 'print unless /^SystemCallFilter/' $@
+endif
 
 pdns-recursor@.service: pdns-recursor.service
 	$(AM_V_GEN)sed -e 's!/pdns_recursor!& --config-name=%i!' \

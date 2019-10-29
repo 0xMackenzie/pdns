@@ -99,9 +99,7 @@ bin_PROGRAMS += \
 	ixplore \
 	sdig
 
-if HAVE_RECVMMSG
 bin_PROGRAMS += calidns
-endif
 
 if HAVE_BOOST_GE_148
 bin_PROGRAMS += \
@@ -162,6 +160,7 @@ pdns_server_SOURCES = \
 	bindlexer.l \
 	bindparser.cc \
 	cachecleaner.hh \
+	circular_buffer.hh \
 	comment.hh \
 	common_startup.cc common_startup.hh \
 	communicator.cc communicator.hh \
@@ -209,6 +208,7 @@ pdns_server_SOURCES = \
 	resolver.cc resolver.hh \
 	responsestats.cc responsestats.hh responsestats-auth.cc \
 	rfc2136handler.cc \
+	secpoll.cc secpoll.hh \
 	secpoll-auth.cc secpoll-auth.hh \
 	serialtweaker.cc \
 	sha.hh \
@@ -223,6 +223,7 @@ pdns_server_SOURCES = \
 	tsigutils.hh tsigutils.cc \
 	tkey.cc \
 	ueberbackend.cc ueberbackend.hh \
+	uuid-utils.hh uuid-utils.cc \
 	unix_semaphore.cc \
 	unix_utility.cc \
 	utility.hh \
@@ -267,10 +268,6 @@ pdns_server_SOURCES += ssqlite3.cc ssqlite3.hh
 pdns_server_LDADD += $(SQLITE3_LIBS)
 endif
 
-if ORACLE
-pdns_server_LDADD += $(ORACLE_LIBS)
-endif
-
 if PKCS11
 pdns_server_SOURCES += pkcs11signers.cc pkcs11signers.hh
 pdns_server_LDADD += $(P11KIT1_LIBS)
@@ -296,6 +293,7 @@ pdnsutil_SOURCES = \
 	bindlexer.l \
 	bindparser.yy \
 	cachecleaner.hh \
+	circular_buffer.hh \
 	dbdnsseckeeper.cc \
 	dnsbackend.cc \
 	dns.cc \
@@ -312,6 +310,7 @@ pdnsutil_SOURCES = \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc \
 	gss_context.cc gss_context.hh \
+	ipcipher.cc ipcipher.hh \
 	iputils.cc iputils.hh \
 	json.cc \
 	logger.cc \
@@ -349,7 +348,8 @@ pdnsutil_LDADD = \
 	$(JSON11_LIBS) \
 	$(LIBDL) \
 	$(BOOST_PROGRAM_OPTIONS_LIBS) \
-	$(LIBCRYPTO_LIBS)
+	$(LIBCRYPTO_LIBS) \
+	$(IPCRYPT_LIBS)
 
 if LIBSODIUM
 pdnsutil_SOURCES += sodiumsigners.cc
@@ -364,10 +364,6 @@ endif
 if SQLITE3
 pdnsutil_SOURCES += ssqlite3.cc ssqlite3.hh
 pdnsutil_LDADD += $(SQLITE3_LIBS)
-endif
-
-if ORACLE
-pdnsutil_LDADD += $(ORACLE_LIBS)
 endif
 
 if PKCS11
@@ -499,6 +495,11 @@ sdig_SOURCES = \
 
 sdig_LDADD = $(LIBCRYPTO_LIBS)
 sdig_LDFLAGS = $(AM_LDFLAGS) $(LIBCRYPTO_LDFLAGS)
+
+if HAVE_LIBCURL
+sdig_SOURCES += minicurl.cc minicurl.hh
+sdig_LDADD += $(LIBCURL)
+endif
 
 calidns_SOURCES = \
 	base32.cc \
@@ -640,6 +641,7 @@ ixfrdist_SOURCES = \
 	threadname.hh threadname.cc \
 	tsigverifier.cc tsigverifier.hh \
 	unix_utility.cc \
+	uuid-utils.hh uuid-utils.cc \
 	webserver.hh webserver.cc \
 	zoneparser-tng.cc
 
@@ -873,25 +875,30 @@ speedtest_SOURCES = \
 	sillyrecords.cc \
 	speedtest.cc \
 	statbag.cc \
-	unix_utility.cc
+	unix_utility.cc \
+	iputils.cc
 
 speedtest_LDFLAGS = $(AM_LDFLAGS) $(LIBCRYPTO_LDFLAGS)
 speedtest_LDADD = $(LIBCRYPTO_LIBS) \
 	$(RT_LIBS)
 
 dnswasher_SOURCES = \
+	base64.cc \
 	dnslabeltext.cc \
 	dnsname.hh dnsname.cc \
 	dnsparser.hh \
 	dnspcap.cc dnspcap.hh \
 	dnswasher.cc \
 	dnswriter.hh \
+	ipcipher.cc ipcipher.hh \
 	logger.cc \
 	misc.cc \
 	qtype.cc \
 	statbag.cc \
 	unix_utility.cc
 
+dnswasher_LDFLAGS = 	$(AM_LDFLAGS) $(BOOST_PROGRAM_OPTIONS_LDFLAGS) $(LIBCRYPTO_LDFLAGS)
+dnswasher_LDADD = 	$(BOOST_PROGRAM_OPTIONS_LIBS) $(LIBCRYPTO_LIBS) $(IPCRYPT_LIBS)
 
 dnsbulktest_SOURCES = \
 	base32.cc \
@@ -1058,7 +1065,8 @@ pdns_notify_SOURCES = \
 	rcpgenerator.cc rcpgenerator.hh \
 	sillyrecords.cc \
 	statbag.cc \
-	unix_utility.cc
+	unix_utility.cc \
+	dns_random.cc
 
 pdns_notify_LDFLAGS = \
 	$(AM_LDFLAGS) \
@@ -1068,6 +1076,10 @@ pdns_notify_LDFLAGS = \
 pdns_notify_LDADD = \
 	$(LIBCRYPTO_LIBS) \
 	$(BOOST_PROGRAM_OPTIONS_LIBS)
+
+if LIBSODIUM
+pdns_notify_LDADD += $(LIBSODIUM_LIBS)
+endif
 
 dnsscope_SOURCES = \
 	arguments.cc \
@@ -1219,7 +1231,8 @@ dnspcap2protobuf_SOURCES = \
 	sillyrecords.cc \
 	statbag.cc \
 	unix_utility.cc \
-	utility.hh
+	utility.hh \
+	uuid-utils.hh uuid-utils.cc
 
 nodist_dnspcap2protobuf_SOURCES=dnsmessage.pb.cc dnsmessage.pb.h
 
@@ -1266,6 +1279,7 @@ testrunner_SOURCES = \
 	ednssubnet.cc \
 	gettime.cc gettime.hh \
 	gss_context.cc gss_context.hh \
+	ipcipher.cc ipcipher.hh \
 	iputils.cc \
 	ixfr.cc ixfr.hh \
 	logger.cc \
@@ -1276,6 +1290,7 @@ testrunner_SOURCES = \
 	nameserver.cc \
 	nsecrecords.cc \
 	opensslsigners.cc opensslsigners.hh \
+	pollmplexer.cc \
 	qtype.cc \
 	rcpgenerator.cc \
 	responsestats.cc \
@@ -1295,11 +1310,14 @@ testrunner_SOURCES = \
 	test-dnsparser_cc.cc \
 	test-dnsparser_hh.cc \
 	test-dnsrecords_cc.cc \
+	test-dnswriter_cc.cc \
+	test-ipcrypt_cc.cc \
 	test-iputils_hh.cc \
 	test-ixfr_cc.cc \
 	test-lock_hh.cc \
 	test-lua_auth4_cc.cc \
 	test-misc_hh.cc \
+	test-mplexer.cc \
 	test-nameserver_cc.cc \
 	test-packetcache_cc.cc \
 	test-packetcache_hh.cc \
@@ -1326,7 +1344,8 @@ testrunner_LDADD = \
 	$(BOOST_UNIT_TEST_FRAMEWORK_LIBS) \
 	$(RT_LIBS) \
 	$(LUA_LIBS) \
-	$(LIBDL)
+	$(LIBDL) \
+	$(IPCRYPT_LIBS)
 
 if PKCS11
 testrunner_SOURCES += pkcs11signers.cc pkcs11signers.hh
@@ -1341,6 +1360,25 @@ endif
 if LIBDECAF
 testrunner_SOURCES += decafsigners.cc
 testrunner_LDADD += $(LIBDECAF_LIBS)
+endif
+
+if HAVE_FREEBSD
+ixfrdist_SOURCES += kqueuemplexer.cc
+testrunner_SOURCES += kqueuemplexer.cc
+endif
+
+if HAVE_LINUX
+ixfrdist_SOURCES += epollmplexer.cc
+testrunner_SOURCES += epollmplexer.cc
+endif
+
+if HAVE_SOLARIS
+ixfrdist_SOURCES += \
+	devpollmplexer.cc \
+	portsmplexer.cc
+testrunner_SOURCES += \
+	devpollmplexer.cc \
+	portsmplexer.cc
 endif
 
 pdns_control_SOURCES = \
@@ -1430,6 +1468,7 @@ fuzz_target_packetcache_SOURCES = \
 	ednsoptions.cc ednsoptions.hh \
 	misc.cc misc.hh \
 	packetcache.hh \
+	qtype.cc qtype.hh \
 	statbag.cc statbag.hh
 
 fuzz_target_packetcache_DEPENDENCIES = $(fuzz_targets_deps)
@@ -1444,6 +1483,7 @@ fuzz_target_dnsdistcache_SOURCES = \
 	dnsname.cc dnsname.hh \
 	dnsparser.cc dnsparser.hh \
 	dnswriter.cc dnswriter.hh \
+	doh.hh \
 	ednsoptions.cc ednsoptions.hh \
 	ednssubnet.cc ednssubnet.hh \
 	iputils.cc iputils.hh \
@@ -1512,7 +1552,46 @@ dnsdist:
 
 if HAVE_SYSTEMD
 pdns.service: pdns.service.in
-	$(AM_V_GEN)sed -e 's![@]sbindir[@]!$(sbindir)!' < $< > $@
+	$(AM_V_GEN)sed -e 's![@]sbindir[@]!$(sbindir)!' -e 's![@]service_user[@]!$(service_user)!' -e 's![@]service_group[@]!$(service_group)!' < $< > $@
+if !HAVE_SYSTEMD_LOCK_PERSONALITY
+	$(AM_V_GEN)perl -ni -e 'print unless /^LockPersonality/' $@
+endif
+if !HAVE_SYSTEMD_PRIVATE_DEVICES
+	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateDevices/' $@
+endif
+if !HAVE_SYSTEMD_PRIVATE_TMP
+	$(AM_V_GEN)perl -ni -e 'print unless /^PrivateTmp/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_CONTROL_GROUPS
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectControlGroups/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_HOME
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectHome/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_KERNEL_MODULES
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectKernelModules/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_KERNEL_TUNABLES
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectKernelTunables/' $@
+endif
+if !HAVE_SYSTEMD_PROTECT_SYSTEM
+	$(AM_V_GEN)perl -ni -e 'print unless /^ProtectSystem/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_ADDRESS_FAMILIES
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictAddressFamilies/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_NAMESPACES
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictNamespaces/' $@
+endif
+if !HAVE_SYSTEMD_RESTRICT_REALTIME
+	$(AM_V_GEN)perl -ni -e 'print unless /^RestrictRealtime/' $@
+endif
+if !HAVE_SYSTEMD_SYSTEM_CALL_ARCHITECTURES
+	$(AM_V_GEN)perl -ni -e 'print unless /^SystemCallArchitectures/' $@
+endif
+if !HAVE_SYSTEMD_SYSTEM_CALL_FILTER
+	$(AM_V_GEN)perl -ni -e 'print unless /^SystemCallFilter/' $@
+endif
 
 pdns@.service: pdns.service
 	$(AM_V_GEN)sed -e 's!/pdns_server!& --config-name=%i!' \

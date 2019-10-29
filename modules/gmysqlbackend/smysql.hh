@@ -32,7 +32,8 @@ public:
   SMySQL(const string &database, const string &host="", uint16_t port=0,
          const string &msocket="",const string &user="",
          const string &password="", const string &group="",
-         bool setIsolation=false, unsigned int timeout=10);
+         bool setIsolation=false, unsigned int timeout=10,
+         bool threadCleanup=false, bool clientSSL=false);
 
   ~SMySQL();
 
@@ -61,6 +62,8 @@ private:
   unsigned int d_timeout;
   uint16_t d_port;
   bool d_setIsolation;
+  bool d_threadCleanup;
+  bool d_clientSSL;
 };
 
 #endif /* SSMYSQL_HH */

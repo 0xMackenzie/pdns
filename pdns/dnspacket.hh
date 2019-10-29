@@ -56,7 +56,8 @@ class DNSPacket
 {
 public:
   DNSPacket(bool isQuery);
-  DNSPacket(const DNSPacket &orig);
+  DNSPacket(const DNSPacket &orig) = default;
+  DNSPacket & operator=(const DNSPacket &) = default;
 
   int noparse(const char *mesg, size_t len); //!< just suck the data inward
   int parse(const char *mesg, size_t len); //!< parse a raw UDP or TCP packet and suck the data inward
@@ -105,7 +106,7 @@ public:
 
   DTime d_dt; //!< the time this packet was created. replyPacket() copies this in for you, so d_dt becomes the time spent processing the question+answer
   void wrapup();  // writes out queued rrs, and generates the binary packet. also shuffles. also rectifies dnsheader 'd', and copies it to the stringbuffer
-  void spoofQuestion(const DNSPacket *qd); //!< paste in the exact right case of the question. Useful for PacketCache
+  void spoofQuestion(const DNSPacket& qd); //!< paste in the exact right case of the question. Useful for PacketCache
   unsigned int getMinTTL(); //!< returns lowest TTL of any record in the packet
   bool isEmpty(); //!< returns true if there are no rrs in the packet
 
@@ -113,15 +114,15 @@ public:
   vector<DNSZoneRecord*> getAnswerRecords(); //!< get a vector with DNSZoneRecords that are answers
   void setCompress(bool compress);
 
-  DNSPacket *replyPacket() const; //!< convenience function that creates a virgin answer packet to this question
+  std::unique_ptr<DNSPacket> replyPacket() const; //!< convenience function that creates a virgin answer packet to this question
 
   void commitD(); //!< copies 'd' into the stringbuffer
   unsigned int getMaxReplyLen(); //!< retrieve the maximum length of the packet we should send in response
   void setMaxReplyLen(int bytes); //!< set the max reply len (used when retrieving from the packet cache, and this changed)
 
-  bool couldBeCached(); //!< returns 0 if this query should bypass the packet cache
+  bool couldBeCached() const; //!< returns 0 if this query should bypass the packet cache
   bool hasEDNSSubnet() const;
-  bool hasEDNS();
+  bool hasEDNS() const;
   uint8_t getEDNSVersion() const { return d_ednsversion; };
   void setEDNSRcode(uint16_t extRCode)
   {
@@ -140,19 +141,20 @@ public:
   string d_peer_principal;
   const DNSName& getTSIGKeyname() const;
 
-  uint16_t qclass;  //!< class of the question - should always be INternet 2
   struct dnsheader d; //!< dnsheader at the start of the databuffer 12
-
-  QType qtype;  //!< type of the question 2
 
   TSIGRecordContent d_trc; //72
 
   ComboAddress d_remote; //28
-  TSIGHashEnum d_tsig_algo; //4
+  TSIGHashEnum d_tsig_algo{TSIG_MD5}; //4
 
-  bool d_tcp;
-  bool d_dnssecOk;
-  bool d_havetsig;
+  int d_ednsRawPacketSizeLimit{-1}; // only used for Lua record
+  uint16_t qclass{QClass::IN};  //!< class of the question - should always be INternet 2
+  QType qtype;  //!< type of the question 2
+
+  bool d_tcp{false};
+  bool d_dnssecOk{false};
+  bool d_havetsig{false};
 
   bool getTSIGDetails(TSIGRecordContent* tr, DNSName* keyname, uint16_t* tsigPos=nullptr) const;
   void setTSIGDetails(const TSIGRecordContent& tr, const DNSName& keyname, const string& secret, const string& previous, bool timersonly=false);
@@ -161,14 +163,11 @@ public:
   vector<DNSZoneRecord>& getRRS() { return d_rrs; }
   bool checkForCorrectTSIG(UeberBackend* B, DNSName* keyname, string* secret, TSIGRecordContent* trc) const;
 
-  static bool s_doEDNSSubnetProcessing;
   static uint16_t s_udpTruncationThreshold; 
-  int d_ednsRawPacketSizeLimit; // only used for Lua record
+  static bool s_doEDNSSubnetProcessing;
+
 private:
   void pasteQ(const char *question, int length); //!< set the question of this packet, useful for crafting replies
-
-  bool d_wrapped; // 1
-  int d_socket; // 4
 
   string d_tsigsecret;
   DNSName d_tsigkeyname;
@@ -179,19 +178,19 @@ private:
   string d_rawpacket; // this is where everything lives 8
   EDNSSubnetOpts d_eso;
 
-  int d_maxreplylen;
-
-  uint8_t d_ednsversion;
-  // WARNING! This is really 12 bits
-  uint16_t d_ednsrcode;
-
+  int d_maxreplylen{0};
+  int d_socket{-1}; // 4
   uint32_t d_hash{0};
-  
-  bool d_compress; // 1
-  bool d_tsigtimersonly;
-  bool d_wantsnsid;
-  bool d_haveednssubnet;
-  bool d_haveednssection;
+  // WARNING! This is really 12 bits
+  uint16_t d_ednsrcode{0};
+  uint8_t d_ednsversion{0};
+
+  bool d_wrapped{false}; // 1
+  bool d_compress{true}; // 1
+  bool d_tsigtimersonly{false};
+  bool d_wantsnsid{false};
+  bool d_haveednssubnet{false};
+  bool d_haveednssection{false};
   bool d_isQuery;
 };
 

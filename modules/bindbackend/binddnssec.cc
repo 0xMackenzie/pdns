@@ -96,7 +96,7 @@ void Bind2Backend::setupDNSSEC()
   if(getArg("dnssec-db").empty() || d_hybrid)
     return;
   try {
-    d_dnssecdb = shared_ptr<SSQLite3>(new SSQLite3(getArg("dnssec-db")));
+    d_dnssecdb = shared_ptr<SSQLite3>(new SSQLite3(getArg("dnssec-db"), getArg("dnssec-db-journal-mode")));
     setupStatements();
   }
   catch(SSqlException& se) {
@@ -123,11 +123,6 @@ void Bind2Backend::setupStatements()
   d_setTSIGKeyQuery_stmt = d_dnssecdb->prepare("replace into tsigkeys (name,algorithm,secret) values(:key_name, :algorithm, :content)", 3);
   d_deleteTSIGKeyQuery_stmt = d_dnssecdb->prepare("delete from tsigkeys where name=:key_name", 1);
   d_getTSIGKeysQuery_stmt = d_dnssecdb->prepare("select name,algorithm,secret from tsigkeys", 0);
-}
-
-void Bind2Backend::release(SSqlStatement** stmt) {
-  delete *stmt;
-  *stmt = NULL;
 }
 
 void Bind2Backend::freeStatements()

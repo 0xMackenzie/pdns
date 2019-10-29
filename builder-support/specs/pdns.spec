@@ -23,6 +23,7 @@ Requires(post): systemd-sysv
 Requires(post): systemd-units
 Requires(preun): systemd-units
 Requires(postun): systemd-units
+BuildRequires: systemd
 BuildRequires: systemd-units
 BuildRequires: systemd-devel
 
@@ -140,15 +141,6 @@ BuildRequires: sqlite-devel
 %description backend-sqlite
 This package contains the SQLite backend for %{name}
 
-%package backend-mydns
-Summary: MyDNS backend for %{name}
-Group: System Environment/Daemons
-Requires: %{name}%{?_isa} = %{version}-%{release}
-%global backends %{backends} mydns
-
-%description backend-mydns
-This package contains the MyDNS backend for %{name}
-
 %if 0%{?rhel} >= 7
 %package backend-odbc
 Summary: UnixODBC backend for %{name}
@@ -165,7 +157,9 @@ Summary: Geo backend for %{name}
 Group: System Environment/Daemons
 Requires: %{name}%{?_isa} = %{version}-%{release}
 BuildRequires: yaml-cpp-devel
+%if 0%{?rhel} <= 7
 BuildRequires: geoip-devel
+%endif
 BuildRequires: libmaxminddb-devel
 %global backends %{backends} geoip
 
@@ -173,6 +167,16 @@ BuildRequires: libmaxminddb-devel
 This package contains the geoip backend for %{name}
 It allows different answers to DNS queries coming from different
 IP address ranges or based on the geoipgraphic location
+
+%package backend-lmdb
+Summary: LMDB backend for %{name}
+Group: System Environment/Daemons
+Requires: %{name}%{?_isa} = %{version}-%{release}
+BuildRequires: lmdb-devel
+%global backends %{backends} lmdb
+
+%description backend-lmdb
+This package contains the lmdb backend for %{name}
 
 %package backend-tinydns
 Summary: TinyDNS backend for %{name}
@@ -204,6 +208,7 @@ This package contains the ixfrdist program.
 export CPPFLAGS="-DLDAP_DEPRECATED"
 
 %configure \
+  --enable-option-checking=fatal \
   --sysconfdir=%{_sysconfdir}/%{name} \
   --disable-static \
   --disable-dependency-tracking \
@@ -394,10 +399,6 @@ fi
 %doc modules/gsqlite3backend/nodnssec-3.x_to_3.4.0_schema.sqlite3.sql
 %{_libdir}/%{name}/libgsqlite3backend.so
 
-%files backend-mydns
-%doc modules/mydnsbackend/schema.mydns.sql
-%{_libdir}/%{name}/libmydnsbackend.so
-
 %if 0%{?rhel} >= 7
 %files backend-odbc
 %doc modules/godbcbackend/schema.mssql.sql
@@ -405,6 +406,9 @@ fi
 
 %files backend-geoip
 %{_libdir}/%{name}/libgeoipbackend.so
+
+%files backend-lmdb
+%{_libdir}/%{name}/liblmdbbackend.so
 
 %files backend-tinydns
 %{_libdir}/%{name}/libtinydnsbackend.so

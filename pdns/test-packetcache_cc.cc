@@ -23,11 +23,11 @@ BOOST_AUTO_TEST_CASE(test_AuthQueryCacheSimple) {
 
   vector<DNSZoneRecord> records;
 
-  BOOST_CHECK_EQUAL(QC.size(), 0);
+  BOOST_CHECK_EQUAL(QC.size(), 0U);
   QC.insert(DNSName("hello"), QType(QType::A), records, 3600, 1);
-  BOOST_CHECK_EQUAL(QC.size(), 1);
-  BOOST_CHECK_EQUAL(QC.purge(), 1);
-  BOOST_CHECK_EQUAL(QC.size(), 0);
+  BOOST_CHECK_EQUAL(QC.size(), 1U);
+  BOOST_CHECK_EQUAL(QC.purge(), 1U);
+  BOOST_CHECK_EQUAL(QC.size(), 0U);
 
   uint64_t counter=0;
   try {
@@ -46,12 +46,12 @@ BOOST_AUTO_TEST_CASE(test_AuthQueryCacheSimple) {
     uint64_t delcounter=0;
     for(delcounter=0; delcounter < counter/100; ++delcounter) {
       DNSName a=DNSName("hello ")+DNSName(std::to_string(delcounter));
-      BOOST_CHECK_EQUAL(QC.purge(a.toString()), 1);
+      BOOST_CHECK_EQUAL(QC.purge(a.toString()), 1U);
     }
 
     BOOST_CHECK_EQUAL(QC.size(), counter-delcounter);
 
-    uint64_t matches=0;
+    int64_t matches=0;
     vector<DNSZoneRecord> entry;
     int64_t expected=counter-delcounter;
     for(; delcounter < counter; ++delcounter) {
@@ -104,6 +104,7 @@ catch(PDNSException& e) {
 
 BOOST_AUTO_TEST_CASE(test_QueryCacheThreaded) {
   try {
+    g_QCmissing = 0;
     AuthQueryCache QC;
     QC.setMaxEntries(1000000);
     g_QC=&QC;
@@ -114,7 +115,7 @@ BOOST_AUTO_TEST_CASE(test_QueryCacheThreaded) {
     for(int i=0; i < 4 ; ++i)
       pthread_join(tid[i], &res);
 
-    BOOST_CHECK_EQUAL(QC.size() + S.read("deferred-cache-inserts"), 400000);
+    BOOST_CHECK_EQUAL(QC.size() + S.read("deferred-cache-inserts"), 400000U);
     BOOST_CHECK_SMALL(1.0*S.read("deferred-cache-inserts"), 10000.0);
 
     for(int i=0; i < 4; ++i)
@@ -156,12 +157,14 @@ try
     DNSPacket r(false);
     r.parse((char*)&pak[0], pak.size());
 
-    /* this step is necessary to get a valid hash */
-    DNSPacket cached(false);
-    g_PC->get(&q, &cached);
+    /* this step is necessary to get a valid hash
+       we directly compute the hash instead of querying the
+       cache because 1/ it's faster 2/ no deferred-lookup issues
+    */
+    q.setHash(g_PC->canHashPacket(q.getString()));
 
     const unsigned int maxTTL = 3600;
-    g_PC->insert(&q, &r, maxTTL);
+    g_PC->insert(q, r, maxTTL);
   }
 
   return 0;
@@ -185,7 +188,7 @@ try
     q.parse((char*)&pak[0], pak.size());
     DNSPacket r(false);
 
-    if(!g_PC->get(&q, &r)) {
+    if(!g_PC->get(q, r)) {
       g_PCmissing++;
     }
   }
@@ -204,6 +207,7 @@ BOOST_AUTO_TEST_CASE(test_PacketCacheThreaded) {
     PC.setTTL(3600);
 
     g_PC=&PC;
+    g_PCmissing = 0;
     pthread_t tid[4];
     for(int i=0; i < 4; ++i)
       pthread_create(&tid[i], 0, threadPCMangler, (void*)(i*1000000UL));
@@ -211,7 +215,8 @@ BOOST_AUTO_TEST_CASE(test_PacketCacheThreaded) {
     for(int i=0; i < 4 ; ++i)
       pthread_join(tid[i], &res);
 
-    BOOST_CHECK_EQUAL(PC.size() + S.read("deferred-packetcache-inserts"), 400000);
+    BOOST_CHECK_EQUAL(PC.size() + S.read("deferred-packetcache-inserts"), 400000UL);
+    BOOST_CHECK_EQUAL(S.read("deferred-packetcache-lookup"), 0UL);
     BOOST_CHECK_SMALL(1.0*S.read("deferred-packetcache-inserts"), 10000.0);
 
     for(int i=0; i < 4; ++i)
@@ -224,9 +229,12 @@ BOOST_AUTO_TEST_CASE(test_PacketCacheThreaded) {
     cerr<<"Hits: "<<S.read("packetcache-hit")<<endl;
     cerr<<"Deferred inserts: "<<S.read("deferred-packetcache-inserts")<<endl;
     cerr<<"Deferred lookups: "<<S.read("deferred-packetcache-lookup")<<endl;
+    cerr<<g_PCmissing<<endl;
+    cerr<<PC.size()<<endl;
 */
-    BOOST_CHECK_EQUAL(g_PCmissing + S.read("packetcache-hit"), 400000);
-    BOOST_CHECK_GT(S.read("deferred-packetcache-inserts") + S.read("deferred-packetcache-lookup"), g_PCmissing);
+
+    BOOST_CHECK_EQUAL(g_PCmissing + S.read("packetcache-hit"), 400000UL);
+    BOOST_CHECK_EQUAL(S.read("deferred-packetcache-inserts") + S.read("deferred-packetcache-lookup"), g_PCmissing);
   }
   catch(PDNSException& e) {
     cerr<<"Had error: "<<e.reason<<endl;
@@ -370,90 +378,90 @@ BOOST_AUTO_TEST_CASE(test_AuthPacketCache) {
     }
 
     /* this call is required so the correct hash is set into q->d_hash */
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), false);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), false);
 
-    PC.insert(&q, &r, 3600);
-    BOOST_CHECK_EQUAL(PC.size(), 1);
+    PC.insert(q, r, 3600);
+    BOOST_CHECK_EQUAL(PC.size(), 1U);
 
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), true);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), true);
     BOOST_CHECK_EQUAL(r2.qdomain, r.qdomain);
 
     /* different QID, still should match */
-    BOOST_CHECK_EQUAL(PC.get(&differentIDQ, &r2), true);
+    BOOST_CHECK_EQUAL(PC.get(differentIDQ, r2), true);
     BOOST_CHECK_EQUAL(r2.qdomain, r.qdomain);
 
     /* with EDNS, should not match */
-    BOOST_CHECK_EQUAL(PC.get(&ednsQ, &r2), false);
+    BOOST_CHECK_EQUAL(PC.get(ednsQ, r2), false);
     /* inserting the EDNS-enabled one too */
-    PC.insert(&ednsQ, &r, 3600);
-    BOOST_CHECK_EQUAL(PC.size(), 2);
+    PC.insert(ednsQ, r, 3600);
+    BOOST_CHECK_EQUAL(PC.size(), 2U);
 
     /* different EDNS versions, should not match */
-    BOOST_CHECK_EQUAL(PC.get(&ednsVersion42, &r2), false);
+    BOOST_CHECK_EQUAL(PC.get(ednsVersion42, r2), false);
 
     /* EDNS DO set, should not match */
-    BOOST_CHECK_EQUAL(PC.get(&ednsDO, &r2), false);
+    BOOST_CHECK_EQUAL(PC.get(ednsDO, r2), false);
 
     /* EDNS Client Subnet set, should not match
        since not only we don't skip the actual option, but the
        total EDNS opt RR is still different. */
-    BOOST_CHECK_EQUAL(PC.get(&ecs1, &r2), false);
+    BOOST_CHECK_EQUAL(PC.get(ecs1, r2), false);
 
     /* inserting the version with ECS Client Subnet set,
      it should NOT replace the existing EDNS one. */
-    PC.insert(&ecs1, &r, 3600);
-    BOOST_CHECK_EQUAL(PC.size(), 3);
+    PC.insert(ecs1, r, 3600);
+    BOOST_CHECK_EQUAL(PC.size(), 3U);
 
     /* different subnet of same size, should NOT match
      since we don't skip the option */
-    BOOST_CHECK_EQUAL(PC.get(&ecs2, &r2), false);
+    BOOST_CHECK_EQUAL(PC.get(ecs2, r2), false);
     BOOST_CHECK_EQUAL(r2.qdomain, r.qdomain);
 
     /* different subnet of different size, should NOT match. */
-    BOOST_CHECK_EQUAL(PC.get(&ecs3, &r2), false);
+    BOOST_CHECK_EQUAL(PC.get(ecs3, r2), false);
 
-    BOOST_CHECK_EQUAL(PC.purge("www.powerdns.com"), 3);
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), false);
-    BOOST_CHECK_EQUAL(PC.size(), 0);
+    BOOST_CHECK_EQUAL(PC.purge("www.powerdns.com"), 3U);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), false);
+    BOOST_CHECK_EQUAL(PC.size(), 0U);
 
-    PC.insert(&q, &r, 3600);
-    BOOST_CHECK_EQUAL(PC.size(), 1);
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), true);
+    PC.insert(q, r, 3600);
+    BOOST_CHECK_EQUAL(PC.size(), 1U);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), true);
     BOOST_CHECK_EQUAL(r2.qdomain, r.qdomain);
-    BOOST_CHECK_EQUAL(PC.purge("com$"), 1);
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), false);
-    BOOST_CHECK_EQUAL(PC.size(), 0);
+    BOOST_CHECK_EQUAL(PC.purge("com$"), 1U);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), false);
+    BOOST_CHECK_EQUAL(PC.size(), 0U);
 
-    PC.insert(&q, &r, 3600);
-    BOOST_CHECK_EQUAL(PC.size(), 1);
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), true);
+    PC.insert(q, r, 3600);
+    BOOST_CHECK_EQUAL(PC.size(), 1U);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), true);
     BOOST_CHECK_EQUAL(r2.qdomain, r.qdomain);
-    BOOST_CHECK_EQUAL(PC.purge("powerdns.com$"), 1);
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), false);
-    BOOST_CHECK_EQUAL(PC.size(), 0);
+    BOOST_CHECK_EQUAL(PC.purge("powerdns.com$"), 1U);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), false);
+    BOOST_CHECK_EQUAL(PC.size(), 0U);
 
-    PC.insert(&q, &r, 3600);
-    BOOST_CHECK_EQUAL(PC.size(), 1);
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), true);
+    PC.insert(q, r, 3600);
+    BOOST_CHECK_EQUAL(PC.size(), 1U);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), true);
     BOOST_CHECK_EQUAL(r2.qdomain, r.qdomain);
-    BOOST_CHECK_EQUAL(PC.purge("www.powerdns.com$"), 1);
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), false);
-    BOOST_CHECK_EQUAL(PC.size(), 0);
+    BOOST_CHECK_EQUAL(PC.purge("www.powerdns.com$"), 1U);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), false);
+    BOOST_CHECK_EQUAL(PC.size(), 0U);
 
-    PC.insert(&q, &r, 3600);
-    BOOST_CHECK_EQUAL(PC.size(), 1);
-    BOOST_CHECK_EQUAL(PC.purge("www.powerdns.net"), 0);
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), true);
+    PC.insert(q, r, 3600);
+    BOOST_CHECK_EQUAL(PC.size(), 1U);
+    BOOST_CHECK_EQUAL(PC.purge("www.powerdns.net"), 0U);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), true);
     BOOST_CHECK_EQUAL(r2.qdomain, r.qdomain);
-    BOOST_CHECK_EQUAL(PC.size(), 1);
+    BOOST_CHECK_EQUAL(PC.size(), 1U);
 
-    BOOST_CHECK_EQUAL(PC.purge("net$"), 0);
-    BOOST_CHECK_EQUAL(PC.get(&q, &r2), true);
+    BOOST_CHECK_EQUAL(PC.purge("net$"), 0U);
+    BOOST_CHECK_EQUAL(PC.get(q, r2), true);
     BOOST_CHECK_EQUAL(r2.qdomain, r.qdomain);
-    BOOST_CHECK_EQUAL(PC.size(), 1);
+    BOOST_CHECK_EQUAL(PC.size(), 1U);
 
-    BOOST_CHECK_EQUAL(PC.purge("www.powerdns.com$"), 1);
-    BOOST_CHECK_EQUAL(PC.size(), 0);
+    BOOST_CHECK_EQUAL(PC.purge("www.powerdns.com$"), 1U);
+    BOOST_CHECK_EQUAL(PC.size(), 0U);
   }
   catch(PDNSException& e) {
     cerr<<"Had error in AuthPacketCache: "<<e.reason<<endl;

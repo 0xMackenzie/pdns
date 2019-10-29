@@ -31,7 +31,6 @@
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/identity.hpp>
 #include <boost/multi_index/sequenced_index.hpp>
-#include <boost/scoped_ptr.hpp>
 using namespace boost::multi_index;
 
 #include <unistd.h>
@@ -76,7 +75,7 @@ public:
     nr.domain   = domain;
     nr.ip       = caIp.toStringWithPort();
     nr.attempts = 0;
-    nr.id       = dns_random(0xffff);
+    nr.id       = dns_random_uint16();
     nr.next     = time(0);
 
     d_nqueue.push_back(nr);
@@ -161,7 +160,7 @@ public:
     d_nsock6 = -1;
     d_preventSelfNotification = false;
   }
-  time_t doNotifications();    
+  time_t doNotifications(PacketHandler *P);
   void go();
   
   
@@ -169,11 +168,11 @@ public:
   bool justNotified(const DNSName &domain, const string &ip);
   void addSuckRequest(const DNSName &domain, const ComboAddress& master);
   void addSlaveCheckRequest(const DomainInfo& di, const ComboAddress& remote);
-  void addTrySuperMasterRequest(DNSPacket *p);
+  void addTrySuperMasterRequest(const DNSPacket& p);
   void notify(const DNSName &domain, const string &ip);
   void mainloop();
   void retrievalLoopThread();
-  void sendNotification(int sock, const DNSName &domain, const ComboAddress& remote, uint16_t id);
+  void sendNotification(int sock, const DNSName &domain, const ComboAddress& remote, uint16_t id, UeberBackend* B);
 
   static void *launchhelper(void *p)
   {
@@ -185,7 +184,7 @@ public:
     static_cast<CommunicatorClass *>(p)->retrievalLoopThread();
     return 0;
   }
-  bool notifyDomain(const DNSName &domain);
+  bool notifyDomain(const DNSName &domain, UeberBackend* B);
 private:
   void loadArgsIntoSet(const char *listname, set<string> &listset);
   void makeNotifySockets();
@@ -194,7 +193,7 @@ private:
   map<pair<DNSName,string>,time_t>d_holes;
   pthread_mutex_t d_holelock;
   void suck(const DNSName &domain, const ComboAddress& remote);
-  void ixfrSuck(const DNSName &domain, const TSIGTriplet& tt, const ComboAddress& laddr, const ComboAddress& remote, boost::scoped_ptr<AuthLua4>& pdl,
+  void ixfrSuck(const DNSName &domain, const TSIGTriplet& tt, const ComboAddress& laddr, const ComboAddress& remote, std::unique_ptr<AuthLua4>& pdl,
                 ZoneStatus& zs, vector<DNSRecord>* axfr);
 
   void slaveRefresh(PacketHandler *P);
@@ -209,7 +208,7 @@ private:
   time_t d_tickinterval;
   set<DomainInfo> d_tocheck;
   struct cmp {
-    bool operator()(const DNSPacket& a, const DNSPacket& b) {
+    bool operator()(const DNSPacket& a, const DNSPacket& b) const {
       return a.qdomain < b.qdomain;
     };
   };
@@ -258,7 +257,7 @@ public:
     this->resolve_name(&addresses, name);
     
     if(b) {
-        b->lookup(QType(QType::ANY),name);
+        b->lookup(QType(QType::ANY),name,-1);
         DNSZoneRecord rr;
         while(b->get(rr))
           if(rr.dr.d_type == QType::A || rr.dr.d_type==QType::AAAA)

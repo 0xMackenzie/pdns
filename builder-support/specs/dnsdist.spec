@@ -20,6 +20,7 @@ BuildRequires: re2-devel
 %if 0%{?suse_version}
 BuildRequires: boost-devel
 BuildRequires: lua-devel
+BuildRequires: systemd
 BuildRequires: systemd-units
 BuildRequires: systemd-devel
 %endif
@@ -27,6 +28,7 @@ BuildRequires: systemd-devel
 BuildRequires: boost-devel
 BuildRequires: gnutls-devel
 BuildRequires: libcap-devel
+BuildRequires: lmdb-devel
 BuildRequires: libsodium-devel
 %ifarch aarch64
 BuildRequires: lua-devel
@@ -39,8 +41,10 @@ BuildRequires: net-snmp-devel
 BuildRequires: protobuf-compiler
 BuildRequires: protobuf-devel
 BuildRequires: re2-devel
+BuildRequires: systemd
 BuildRequires: systemd-devel
 BuildRequires: systemd-units
+BuildRequires: tinycdb-devel
 %endif
 
 %if 0%{?el6}
@@ -52,7 +56,10 @@ Requires(pre): shadow
 %endif
 %if 0%{?rhel} >= 7
 Requires(pre): shadow-utils
+%if 0%{?rhel} == 7
+# No fstrm in EPEL 8 (yet) https://bugzilla.redhat.com/show_bug.cgi?id=1760298
 BuildRequires: fstrm-devel
+%endif
 %systemd_requires
 %endif
 
@@ -71,6 +78,7 @@ sed -i '/^ExecStart/ s/dnsdist/dnsdist -u dnsdist -g dnsdist/' dnsdist.service.i
 
 %build
 %configure \
+  --enable-option-checking=fatal \
   --sysconfdir=/etc/dnsdist \
   --disable-static \
   --disable-dependency-tracking \
@@ -93,17 +101,21 @@ sed -i '/^ExecStart/ s/dnsdist/dnsdist -u dnsdist -g dnsdist/' dnsdist.service.i
   --without-protobuf \
   --without-net-snmp
 %endif
-%if 0%{?rhel} >= 7
+%if 0%{?rhel} == 7
   --enable-dnstap \
+%endif
+%if 0%{?rhel} >= 7
   --with-gnutls \
   --with-protobuf \
   --with-lua=%{lua_implementation} \
   --with-libcap \
   --with-libsodium \
   --enable-dnscrypt \
+  --enable-dns-over-https \
   --enable-systemd --with-systemd=/lib/systemd/system \
   --with-re2 \
-  --with-net-snmp
+  --with-net-snmp \
+  PKG_CONFIG_PATH=/opt/lib64/pkgconfig
 %endif
 
 %if 0%{?el6}

@@ -17,24 +17,24 @@ struct Question
   int q;
   DTime d_dt;
   DNSName qdomain;
-  DNSPacket* replyPacket()
+  QType qtype;
+  std::unique_ptr<DNSPacket> replyPacket()
   {
-    return new DNSPacket(false);
+    return make_unique<DNSPacket>(false);
   }
 };
 
 struct Backend
 {
-  DNSPacket* question(Question*)
+  std::unique_ptr<DNSPacket> question(Question&)
   {
-    return new DNSPacket(true);
+    return make_unique<DNSPacket>(true);
   }
 };
 
 static std::atomic<int> g_receivedAnswers;
-static void report(DNSPacket* A)
+static void report(std::unique_ptr<DNSPacket>& A)
 {
-  delete A;
   g_receivedAnswers++;
 }
 
@@ -49,8 +49,8 @@ BOOST_AUTO_TEST_CASE(test_distributor_basic) {
 
   int n;
   for(n=0; n < 100; ++n)  {
-    auto q = new Question();
-    q->d_dt.set(); 
+    Question q;
+    q.d_dt.set(); 
     d->question(q, report);
   }
   sleep(1);
@@ -59,23 +59,35 @@ BOOST_AUTO_TEST_CASE(test_distributor_basic) {
 
 struct BackendSlow
 {
-  DNSPacket* question(Question*)
+  std::unique_ptr<DNSPacket> question(Question&)
   {
     sleep(1);
-    return new DNSPacket(true);
+    return make_unique<DNSPacket>(true);
   }
 };
 
+static std::atomic<int> g_receivedAnswers1;
+static void report1(std::unique_ptr<DNSPacket>& A)
+{
+  g_receivedAnswers1++;
+}
 
 BOOST_AUTO_TEST_CASE(test_distributor_queue) {
+  ::arg().set("overload-queue-length","Maximum queuelength moving to packetcache only")="0";
+  ::arg().set("max-queue-length","Maximum queuelength before considering situation lost")="1000";
+  ::arg().set("queue-limit","Maximum number of milliseconds to queue a query")="1500";
+  S.declare("servfail-packets","Number of times a server-failed packet was sent out");
+  S.declare("timedout-packets", "timedout-packets");
+
   auto d=Distributor<DNSPacket, Question, BackendSlow>::Create(2);
 
   BOOST_CHECK_EXCEPTION( {
     int n;
-    for(n=0; n < 6000; ++n)  {
-      auto q = new Question();
-      q->d_dt.set(); 
-      d->question(q, report);
+    // bound should be higher than max-queue-length
+    for(n=0; n < 2000; ++n)  {
+      Question q;
+      q.d_dt.set(); 
+      d->question(q, report1);
     }
     }, DistributorFatal, [](DistributorFatal) { return true; });
 };
@@ -89,14 +101,14 @@ struct BackendDies
   ~BackendDies()
   {
   }
-  DNSPacket* question(Question* q)
+  std::unique_ptr<DNSPacket> question(Question& q)
   {
     //  cout<<"Q: "<<q->qdomain<<endl;
     if(!d_ourcount && ++d_count == 10) {
       // cerr<<"Going.. down!"<<endl;
       throw runtime_error("kill");
     }
-    return new DNSPacket(true);
+    return make_unique<DNSPacket>(true);
   }
   static std::atomic<int> s_count;
   int d_count{0};
@@ -107,23 +119,27 @@ std::atomic<int> BackendDies::s_count;
 
 std::atomic<int> g_receivedAnswers2;
 
-static void report2(DNSPacket* A)
+static void report2(std::unique_ptr<DNSPacket>& A)
 {
-  delete A;
   g_receivedAnswers2++;
 }
 
 
 BOOST_AUTO_TEST_CASE(test_distributor_dies) {
+  ::arg().set("overload-queue-length","Maximum queuelength moving to packetcache only")="0";
+  ::arg().set("max-queue-length","Maximum queuelength before considering situation lost")="5000";
+  ::arg().set("queue-limit","Maximum number of milliseconds to queue a query")="1500";
+  S.declare("servfail-packets","Number of times a server-failed packet was sent out");
+  S.declare("timedout-packets", "timedout-packets");
+
   auto d=Distributor<DNSPacket, Question, BackendDies>::Create(10);
-  sleep(1);
-  g_receivedAnswers=0;
 
   try {
     for(int n=0; n < 100; ++n)  {
-      auto q = new Question();
-      q->d_dt.set(); 
-      q->qdomain=DNSName(std::to_string(n));
+      Question q;
+      q.d_dt.set(); 
+      q.qdomain=DNSName(std::to_string(n));
+      q.qtype = QType(QType::A);
       d->question(q, report2);
     }
 

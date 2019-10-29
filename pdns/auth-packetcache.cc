@@ -63,22 +63,21 @@ AuthPacketCache::~AuthPacketCache()
   }
 }
 
-bool AuthPacketCache::get(DNSPacket *p, DNSPacket *cached)
+bool AuthPacketCache::get(DNSPacket& p, DNSPacket& cached)
 {
-  cleanupIfNeeded();
-
   if(!d_ttl) {
-    (*d_statnummiss)++;
     return false;
   }
 
-  uint32_t hash = canHashPacket(p->getString());
-  p->setHash(hash);
+  cleanupIfNeeded();
+
+  uint32_t hash = canHashPacket(p.getString());
+  p.setHash(hash);
 
   string value;
   bool haveSomething;
   time_t now = time(nullptr);
-  auto& mc = getMap(p->qdomain);
+  auto& mc = getMap(p.qdomain);
   {
     TryReadLock rl(&mc.d_mut);
     if(!rl.gotIt()) {
@@ -86,7 +85,7 @@ bool AuthPacketCache::get(DNSPacket *p, DNSPacket *cached)
       return false;
     }
 
-    haveSomething = getEntryLocked(mc.d_map, p->getString(), hash, p->qdomain, p->qtype.getCode(), p->d_tcp, now, value);
+    haveSomething = getEntryLocked(mc.d_map, p.getString(), hash, p.qdomain, p.qtype.getCode(), p.d_tcp, now, value);
   }
 
   if (!haveSomething) {
@@ -94,14 +93,14 @@ bool AuthPacketCache::get(DNSPacket *p, DNSPacket *cached)
     return false;
   }
 
-  if(cached->noparse(value.c_str(), value.size()) < 0) {
+  if(cached.noparse(value.c_str(), value.size()) < 0) {
     return false;
   }
 
   (*d_statnumhit)++;
-  cached->spoofQuestion(p); // for correct case
-  cached->qdomain = p->qdomain;
-  cached->qtype = p->qtype;
+  cached.spoofQuestion(p); // for correct case
+  cached.qdomain = p.qdomain;
+  cached.qtype = p.qtype;
 
   return true;
 }
@@ -111,15 +110,19 @@ bool AuthPacketCache::entryMatches(cmap_t::index<HashTag>::type::iterator& iter,
   return iter->tcp == tcp && iter->qtype == qtype && iter->qname == qname && queryMatches(iter->query, query, qname);
 }
 
-void AuthPacketCache::insert(DNSPacket *q, DNSPacket *r, unsigned int maxTTL)
+void AuthPacketCache::insert(DNSPacket& q, DNSPacket& r, unsigned int maxTTL)
 {
+  if(!d_ttl) {
+    return;
+  }
+
   cleanupIfNeeded();
 
-  if (ntohs(q->d.qdcount) != 1) {
+  if (ntohs(q.d.qdcount) != 1) {
     return; // do not try to cache packets with multiple questions
   }
 
-  if (q->qclass != QClass::IN) // we only cache the INternet
+  if (q.qclass != QClass::IN) // we only cache the INternet
     return;
 
   uint32_t ourttl = std::min(d_ttl, maxTTL);
@@ -127,17 +130,17 @@ void AuthPacketCache::insert(DNSPacket *q, DNSPacket *r, unsigned int maxTTL)
     return;
   }  
 
-  uint32_t hash = q->getHash();
+  uint32_t hash = q.getHash();
   time_t now = time(nullptr);
   CacheEntry entry;
   entry.hash = hash;
   entry.created = now;
   entry.ttd = now + ourttl;
-  entry.qname = q->qdomain;
-  entry.qtype = q->qtype.getCode();
-  entry.value = r->getString();
-  entry.tcp = r->d_tcp;
-  entry.query = q->getString();
+  entry.qname = q.qdomain;
+  entry.qtype = q.qtype.getCode();
+  entry.value = r.getString();
+  entry.tcp = r.d_tcp;
+  entry.query = q.getString();
   
   auto& mc = getMap(entry.qname);
   {
@@ -192,6 +195,10 @@ bool AuthPacketCache::getEntryLocked(cmap_t& map, const std::string& query, uint
 /* clears the entire cache. */
 uint64_t AuthPacketCache::purge()
 {
+  if(!d_ttl) {
+    return 0;
+  }
+
   d_statnumentries->store(0);
 
   return purgeLockedCollectionsVector(d_maps);
@@ -210,6 +217,10 @@ uint64_t AuthPacketCache::purgeExact(const DNSName& qname)
 /* purges entries from the packetcache. If match ends on a $, it is treated as a suffix */
 uint64_t AuthPacketCache::purge(const string &match)
 {
+  if(!d_ttl) {
+    return 0;
+  }
+
   uint64_t delcount = 0;
 
   if(ends_with(match, "$")) {

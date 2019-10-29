@@ -91,20 +91,73 @@ try
           boost::replace_all(serverName, ".", "_");
           const string base = namespace_name + "." + hostname + "." + instance_name + ".servers." + serverName + ".";
           str<<base<<"queries" << ' ' << state->queries.load() << " " << now << "\r\n";
+          str<<base<<"responses" << ' ' << state->responses.load() << " " << now << "\r\n";
           str<<base<<"drops" << ' ' << state->reuseds.load() << " " << now << "\r\n";
           str<<base<<"latency" << ' ' << (state->availability != DownstreamState::Availability::Down ? state->latencyUsec/1000.0 : 0) << " " << now << "\r\n";
           str<<base<<"senderrors" << ' ' << state->sendErrors.load() << " " << now << "\r\n";
           str<<base<<"outstanding" << ' ' << state->outstanding.load() << " " << now << "\r\n";
+          str<<base<<"tcpdiedsendingquery" << ' '<< state->tcpDiedSendingQuery.load() << " " << now << "\r\n";
+          str<<base<<"tcpdiedreaddingresponse" << ' '<< state->tcpDiedReadingResponse.load() << " " << now << "\r\n";
+          str<<base<<"tcpgaveup" << ' '<< state->tcpGaveUp.load() << " " << now << "\r\n";
+          str<<base<<"tcpreadimeouts" << ' '<< state->tcpReadTimeouts.load() << " " << now << "\r\n";
+          str<<base<<"tcpwritetimeouts" << ' '<< state->tcpWriteTimeouts.load() << " " << now << "\r\n";
+          str<<base<<"tcpcurrentconnections" << ' '<< state->tcpCurrentConnections.load() << " " << now << "\r\n";
+          str<<base<<"tcpavgqueriesperconnection" << ' '<< state->tcpAvgQueriesPerConnection.load() << " " << now << "\r\n";
+          str<<base<<"tcpavgconnectionduration" << ' '<< state->tcpAvgConnectionDuration.load() << " " << now << "\r\n";
         }
+
+        std::map<std::string,uint64_t> frontendDuplicates;
         for(const auto& front : g_frontends) {
           if (front->udpFD == -1 && front->tcpFD == -1)
             continue;
 
           string frontName = front->local.toString() + ":" + std::to_string(front->local.getPort()) +  (front->udpFD >= 0 ? "_udp" : "_tcp");
           boost::replace_all(frontName, ".", "_");
+          auto dupPair = frontendDuplicates.insert({frontName, 1});
+          if (!dupPair.second) {
+            frontName = frontName + "_" + std::to_string(dupPair.first->second);
+            ++(dupPair.first->second);
+          }
+
           const string base = namespace_name + "." + hostname + "." + instance_name + ".frontends." + frontName + ".";
           str<<base<<"queries" << ' ' << front->queries.load() << " " << now << "\r\n";
+          str<<base<<"responses" << ' ' << front->responses.load() << " " << now << "\r\n";
+          str<<base<<"tcpdiedreadingquery" << ' '<< front->tcpDiedReadingQuery.load() << " " << now << "\r\n";
+          str<<base<<"tcpdiedsendingresponse" << ' '<< front->tcpDiedSendingResponse.load() << " " << now << "\r\n";
+          str<<base<<"tcpgaveup" << ' '<< front->tcpGaveUp.load() << " " << now << "\r\n";
+          str<<base<<"tcpclientimeouts" << ' '<< front->tcpClientTimeouts.load() << " " << now << "\r\n";
+          str<<base<<"tcpdownstreamtimeouts" << ' '<< front->tcpDownstreamTimeouts.load() << " " << now << "\r\n";
+          str<<base<<"tcpcurrentconnections" << ' '<< front->tcpCurrentConnections.load() << " " << now << "\r\n";
+          str<<base<<"tcpavgqueriesperconnection" << ' '<< front->tcpAvgQueriesPerConnection.load() << " " << now << "\r\n";
+          str<<base<<"tcpavgconnectionduration" << ' '<< front->tcpAvgConnectionDuration.load() << " " << now << "\r\n";
+          str<<base<<"tls10-queries" << ' ' << front->tls10queries.load() << " " << now << "\r\n";
+          str<<base<<"tls11-queries" << ' ' << front->tls11queries.load() << " " << now << "\r\n";
+          str<<base<<"tls12-queries" << ' ' << front->tls12queries.load() << " " << now << "\r\n";
+          str<<base<<"tls13-queries" << ' ' << front->tls13queries.load() << " " << now << "\r\n";
+          str<<base<<"tls-unknown-queries" << ' ' << front->tlsUnknownqueries.load() << " " << now << "\r\n";
+          str<<base<<"tlsnewsessions" << ' ' << front->tlsNewSessions.load() << " " << now << "\r\n";
+          str<<base<<"tlsresumptions" << ' ' << front->tlsResumptions.load() << " " << now << "\r\n";
+          str<<base<<"tlsunknownticketkeys" << ' ' << front->tlsUnknownTicketKey.load() << " " << now << "\r\n";
+          str<<base<<"tlsinactiveticketkeys" << ' ' << front->tlsInactiveTicketKey.load() << " " << now << "\r\n";
+          const TLSErrorCounters* errorCounters = nullptr;
+          if (front->tlsFrontend != nullptr) {
+            errorCounters = &front->tlsFrontend->d_tlsCounters;
+          }
+          else if (front->dohFrontend != nullptr) {
+            errorCounters = &front->dohFrontend->d_tlsCounters;
+          }
+          if (errorCounters != nullptr) {
+            str<<base<<"tlsdhkeytoosmall" << ' ' << errorCounters->d_dhKeyTooSmall << " " << now << "\r\n";
+            str<<base<<"tlsinappropriatefallback" << ' ' << errorCounters->d_inappropriateFallBack << " " << now << "\r\n";
+            str<<base<<"tlsnosharedcipher" << ' ' << errorCounters->d_noSharedCipher << " " << now << "\r\n";
+            str<<base<<"tlsunknownciphertype" << ' ' << errorCounters->d_unknownCipherType << " " << now << "\r\n";
+            str<<base<<"tlsunknownkeyexchangetype" << ' ' << errorCounters->d_unknownKeyExchangeType << " " << now << "\r\n";
+            str<<base<<"tlsunknownprotocol" << ' ' << errorCounters->d_unknownProtocol << " " << now << "\r\n";
+            str<<base<<"tlsunsupportedec" << ' ' << errorCounters->d_unsupportedEC << " " << now << "\r\n";
+            str<<base<<"tlsunsupportedprotocol" << ' ' << errorCounters->d_unsupportedProtocol << " " << now << "\r\n";
+          }
         }
+
         auto localPools = g_pools.getLocal();
         for (const auto& entry : *localPools) {
           string poolName = entry.first;
@@ -130,6 +183,54 @@ try
           }
         }
 
+#ifdef HAVE_DNS_OVER_HTTPS
+        {
+          std::map<std::string,uint64_t> dohFrontendDuplicates;
+          const string base = "dnsdist." + hostname + ".main.doh.";
+          for(const auto& doh : g_dohlocals) {
+            string name = doh->d_local.toStringWithPort();
+            boost::replace_all(name, ".", "_");
+            boost::replace_all(name, ":", "_");
+            boost::replace_all(name, "[", "_");
+            boost::replace_all(name, "]", "_");
+
+            auto dupPair = dohFrontendDuplicates.insert({name, 1});
+            if (!dupPair.second) {
+              name = name + "_" + std::to_string(dupPair.first->second);
+              ++(dupPair.first->second);
+            }
+
+            vector<pair<const char*, const std::atomic<uint64_t>&>> v{
+              {"http-connects", doh->d_httpconnects},
+              {"http1-queries", doh->d_http1Stats.d_nbQueries},
+              {"http2-queries", doh->d_http2Stats.d_nbQueries},
+              {"http1-200-responses", doh->d_http1Stats.d_nb200Responses},
+              {"http2-200-responses", doh->d_http2Stats.d_nb200Responses},
+              {"http1-400-responses", doh->d_http1Stats.d_nb400Responses},
+              {"http2-400-responses", doh->d_http2Stats.d_nb400Responses},
+              {"http1-403-responses", doh->d_http1Stats.d_nb403Responses},
+              {"http2-403-responses", doh->d_http2Stats.d_nb403Responses},
+              {"http1-500-responses", doh->d_http1Stats.d_nb500Responses},
+              {"http2-500-responses", doh->d_http2Stats.d_nb500Responses},
+              {"http1-502-responses", doh->d_http1Stats.d_nb502Responses},
+              {"http2-502-responses", doh->d_http2Stats.d_nb502Responses},
+              {"http1-other-responses", doh->d_http1Stats.d_nbOtherResponses},
+              {"http2-other-responses", doh->d_http2Stats.d_nbOtherResponses},
+              {"get-queries", doh->d_getqueries},
+              {"post-queries", doh->d_postqueries},
+              {"bad-requests", doh->d_badrequests},
+              {"error-responses", doh->d_errorresponses},
+              {"redirect-responses", doh->d_redirectresponses},
+              {"valid-responses", doh->d_validresponses}
+            };
+
+            for(const auto& item : v) {
+              str<<base<<name<<"."<<item.first << " " << item.second << " " << now <<"\r\n";
+            }
+          }
+        }
+#endif /* HAVE_DNS_OVER_HTTPS */
+
         {
           WriteLock wl(&g_qcount.queryLock);
           std::string qname;
@@ -145,7 +246,7 @@ try
 
         int ret = waitForRWData(s.getHandle(), false, 1 , 0);
         if(ret <= 0 ) {
-          vinfolog("Unable to write data to carbon server on %s: %s", server.toStringWithPort(), (ret<0 ? strerror(errno) : "Timeout"));
+          vinfolog("Unable to write data to carbon server on %s: %s", server.toStringWithPort(), (ret<0 ? stringerror() : "Timeout"));
           continue;
         }
         s.setBlocking();

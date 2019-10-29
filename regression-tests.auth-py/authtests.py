@@ -14,14 +14,34 @@ import dns
 import dns.message
 
 from pprint import pprint
+from eqdnsmessage import AssertEqualDNSMessageMixin
 
-class AuthTest(unittest.TestCase):
+class AuthTest(AssertEqualDNSMessageMixin, unittest.TestCase):
     """
     Setup auth required for the tests
     """
 
     _confdir = 'auth'
     _authPort = 5300
+
+    _config_params = []
+
+    _config_template_default = """
+module-dir=../regression-tests/modules
+daemon=no
+local-ipv6=
+bind-config={confdir}/named.conf
+bind-dnssec-db={bind_dnssec_db}
+socket-dir={confdir}
+cache-ttl=0
+negquery-cache-ttl=0
+query-cache-ttl=0
+log-dns-queries=yes
+log-dns-details=yes
+loglevel=9
+distributor-threads=1"""
+
+    _config_template = ""
 
     _root_DS = "63149 13 1 a59da3f5c1b97fcd5fa2b3b2b0ac91d38a60d33a"
 
@@ -92,28 +112,13 @@ options {
     def generateAuthConfig(cls, confdir):
         bind_dnssec_db = os.path.join(confdir, 'bind-dnssec.sqlite3')
 
+        params = tuple([getattr(cls, param) for param in cls._config_params])
+
         with open(os.path.join(confdir, 'pdns.conf'), 'w') as pdnsconf:
-            pdnsconf.write("""
-module-dir=../regression-tests/modules
-launch=bind geoip
-daemon=no
-local-ipv6=
-bind-config={confdir}/named.conf
-bind-dnssec-db={bind_dnssec_db}
-socket-dir={confdir}
-cache-ttl=0
-negquery-cache-ttl=0
-query-cache-ttl=0
-log-dns-queries=yes
-log-dns-details=yes
-loglevel=9
-geoip-database-files=../modules/geoipbackend/regression-tests/GeoLiteCity.mmdb
-edns-subnet-processing=yes
-expand-alias=yes
-resolver={prefix}.1:5301
-any-to-tcp=no
-distributor-threads=1""".format(confdir=confdir, prefix=cls._PREFIX,
-                                bind_dnssec_db=bind_dnssec_db))
+            pdnsconf.write(cls._config_template_default.format(
+                confdir=confdir, prefix=cls._PREFIX,
+                bind_dnssec_db=bind_dnssec_db))
+            pdnsconf.write(cls._config_template % params)
 
         pdnsutilCmd = [os.environ['PDNSUTIL'],
                        '--config-dir=%s' % confdir,
@@ -124,8 +129,7 @@ distributor-threads=1""".format(confdir=confdir, prefix=cls._PREFIX,
         try:
             subprocess.check_output(pdnsutilCmd, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
-            print(e.output)
-            raise
+            raise AssertionError('%s failed (%d): %s' % (pdnsutilCmd, e.returncode, e.output))
 
     @classmethod
     def secureZone(cls, confdir, zonename, key=None):
@@ -152,8 +156,7 @@ distributor-threads=1""".format(confdir=confdir, prefix=cls._PREFIX,
         try:
             subprocess.check_output(pdnsutilCmd, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
-            print(e.output)
-            raise
+            raise AssertionError('%s failed (%d): %s' % (pdnsutilCmd, e.returncode, e.output))
 
     @classmethod
     def generateAllAuthConfig(cls, confdir):
@@ -339,7 +342,7 @@ distributor-threads=1""".format(confdir=confdir, prefix=cls._PREFIX,
 
     def setUp(self):
         # This function is called before every tests
-        return
+        super(AuthTest, self).setUp()
 
     ## Functions for comparisons
     def assertMessageHasFlags(self, msg, flags, ednsflags=[]):

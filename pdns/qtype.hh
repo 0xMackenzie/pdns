@@ -79,7 +79,6 @@ public:
     MB=7,
     MG=8,
     MR=9,
-    WKS=11,
     PTR=12,
     HINFO=13,
     MINFO=14,
@@ -131,6 +130,10 @@ public:
     LUA=65402
   };
 
+  QType(typeenum orig) : code(orig)
+  {
+  }
+
   typedef pair<string,uint16_t> namenum;
   static vector<namenum> names;
 
@@ -175,7 +178,6 @@ private:
       qtype_insert("MB", 7);
       qtype_insert("MG", 8);
       qtype_insert("MR", 9);
-      qtype_insert("WKS", 11);
       qtype_insert("PTR", 12);
       qtype_insert("HINFO", 13);
       qtype_insert("MINFO", 14);

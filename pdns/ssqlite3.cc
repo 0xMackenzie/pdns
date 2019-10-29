@@ -46,16 +46,18 @@ int pdns_sqlite3_clear_bindings(sqlite3_stmt *pStmt){
   return rc;
 }
 
+static string SSQLite3ErrorString(sqlite3 *db)
+{
+  return string(sqlite3_errmsg(db)+string(" (")+std::to_string(sqlite3_extended_errcode(db))+string(")"));
+}
+
 class SSQLite3Statement: public SSqlStatement
 {
 public:
   SSQLite3Statement(SSQLite3 *db, bool dolog, const string& query) :
-    d_prepared(false),
     d_query(query),
-    d_dolog(dolog),
-    d_stmt(nullptr),
-    d_rc(0),
-    d_db(db)
+    d_db(db),
+    d_dolog(dolog)
   {
   }
 
@@ -89,8 +91,8 @@ public:
       // failed.
       releaseStatement();
       if (d_rc == SQLITE_CANTOPEN)
-        throw SSqlException(string("CANTOPEN error in sqlite3, often caused by unwritable sqlite3 db *directory*: ")+string(sqlite3_errmsg(d_db->db())));
-      throw SSqlException(string("Error while retrieving SQLite query results: ")+string(sqlite3_errmsg(d_db->db())));
+        throw SSqlException(string("CANTOPEN error in sqlite3, often caused by unwritable sqlite3 db *directory*: ")+SSQLite3ErrorString(d_db->db()));
+      throw SSqlException(string("Error while retrieving SQLite query results: ")+SSQLite3ErrorString(d_db->db()));
     }
     if(d_dolog) 
       g_log<<Logger::Warning<< "Query "<<((long)(void*)this)<<": "<<d_dtime.udiffNoReset()<<" usec to execute"<<endl;
@@ -149,12 +151,13 @@ public:
   const string& getQuery() { return d_query; };
 private:
   string d_query;
-  sqlite3_stmt* d_stmt;
-  SSQLite3* d_db;
-  int d_rc;
-  bool d_dolog;
-  bool d_prepared;
   DTime d_dtime;
+  sqlite3_stmt* d_stmt{nullptr};
+  SSQLite3* d_db{nullptr};
+  int d_rc{0};
+  bool d_dolog;
+  bool d_prepared{false};
+
   void prepareStatement() {
     const char *pTail;
 
@@ -166,7 +169,7 @@ private:
 #endif
     {
       releaseStatement();
-      throw SSqlException(string("Unable to compile SQLite statement : '")+d_query+"': "+sqlite3_errmsg(d_db->db()));
+      throw SSqlException(string("Unable to compile SQLite statement : '")+d_query+"': "+SSQLite3ErrorString(d_db->db()));
     }
     if (pTail && strlen(pTail)>0)
       g_log<<Logger::Warning<<"Sqlite3 command partially processed. Unprocessed part: "<<pTail<<endl;
@@ -176,13 +179,13 @@ private:
   void releaseStatement() {
     if (d_stmt)
       sqlite3_finalize(d_stmt);
-    d_stmt = NULL;
+    d_stmt = nullptr;
     d_prepared = false;
   }
 };
 
 // Constructor.
-SSQLite3::SSQLite3( const std::string & database, bool creat )
+SSQLite3::SSQLite3( const std::string & database, const std::string & journalmode, bool creat )
 {
   if (access( database.c_str(), F_OK ) == -1){
     if (!creat)
@@ -197,6 +200,9 @@ SSQLite3::SSQLite3( const std::string & database, bool creat )
   m_dolog = 0;
   m_in_transaction = false;
   sqlite3_busy_handler(m_pDB, busyHandler, 0);
+
+  if(journalmode.length())
+    execute("PRAGMA journal_mode="+journalmode);
 }
 
 void SSQLite3::setLog(bool state)
@@ -229,10 +235,15 @@ void SSQLite3::execute(const string& query) {
   int rc;
   if (sqlite3_exec(m_pDB, query.c_str(), NULL, NULL, &errmsg) == SQLITE_BUSY) {
     if (m_in_transaction) {
-        throw("Failed to execute query: " + string(errmsg));
+      std::string errstr(errmsg);
+      sqlite3_free(errmsg);
+      throw("Failed to execute query: " + errstr);
     } else {
-      if ((rc = sqlite3_exec(m_pDB, query.c_str(), NULL, NULL, &errmsg) != SQLITE_OK) && rc != SQLITE_DONE && rc != SQLITE_ROW)
-        throw("Failed to execute query: " + string(errmsg));
+      if ((rc = sqlite3_exec(m_pDB, query.c_str(), NULL, NULL, &errmsg) != SQLITE_OK) && rc != SQLITE_DONE && rc != SQLITE_ROW) {
+        std::string errstr(errmsg);
+        sqlite3_free(errmsg);
+        throw("Failed to execute query: " + errstr);
+      }
     }
   }
 }

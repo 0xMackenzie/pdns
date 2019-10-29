@@ -30,6 +30,7 @@
 #include <iostream>
 #include "iputils.hh"
 #include "rec_channel.hh"
+#include "rec_metrics.hh"
 #include "arguments.hh"
 #include "misc.hh"
 #include "syncres.hh"
@@ -41,6 +42,7 @@
 #include "ext/incbin/incbin.h"
 #include "rec-lua-conf.hh"
 #include "rpzloader.hh"
+#include "uuid-utils.hh"
 
 extern thread_local FDMultiplexer* t_fdm;
 
@@ -48,8 +50,13 @@ using json11::Json;
 
 void productServerStatisticsFetch(map<string,string>& out)
 {
-  map<string,string> stats = getAllStatsMap();
+  map<string,string> stats = getAllStatsMap(StatComponent::API);
   out.swap(stats);
+}
+
+boost::optional<uint64_t> productServerStatisticsFetch(const std::string& name)
+{
+  return getStatByName(name);
 }
 
 static void apiWriteConfigFile(const string& filebasename, const string& content)
@@ -414,6 +421,50 @@ static void apiServerRPZStats(HttpRequest* req, HttpResponse* resp) {
   resp->setBody(ret);
 }
 
+
+static void prometheusMetrics(HttpRequest *req, HttpResponse *resp) {
+    static MetricDefinitionStorage s_metricDefinitions;
+
+    if (req->method != "GET")
+        throw HttpMethodNotAllowedException();
+
+    registerAllStats();
+
+
+    std::ostringstream output;
+    typedef map <string, string> varmap_t;
+    varmap_t varmap = getAllStatsMap(
+            StatComponent::API); // Argument controls blacklisting of any stats. So stats-api-blacklist will be used to block returned stats.
+    for (const auto &tup :  varmap) {
+        std::string metricName = tup.first;
+
+        // Prometheus suggest using '_' instead of '-'
+        std::string prometheusMetricName = "pdns_recursor_" + boost::replace_all_copy(metricName, "-", "_");
+
+        MetricDefinition metricDetails;
+
+        if (s_metricDefinitions.getMetricDetails(metricName, metricDetails)) {
+          std::string prometheusTypeName = s_metricDefinitions.getPrometheusStringMetricType(
+                  metricDetails.prometheusType);
+
+          if (prometheusTypeName.empty()) {
+            continue;
+          }
+
+          // for these we have the help and types encoded in the sources:
+          output << "# HELP " << prometheusMetricName << " " << metricDetails.description << "\n";
+          output << "# TYPE " << prometheusMetricName << " " << prometheusTypeName << "\n";
+        }
+        output << prometheusMetricName << " " << tup.second << "\n";
+    }
+
+    resp->body = output.str();
+    resp->headers["Content-Type"] = "text/plain";
+    resp->status = 200;
+
+}
+
+
 #include "htmlfiles.h"
 
 static void serveStuff(HttpRequest* req, HttpResponse* resp)
@@ -449,9 +500,10 @@ RecursorWebServer::RecursorWebServer(FDMultiplexer* fdm)
 {
   registerAllStats();
 
-  d_ws = new AsyncWebServer(fdm, arg()["webserver-address"], arg().asNum("webserver-port"));
+  d_ws = std::unique_ptr<AsyncWebServer>(new AsyncWebServer(fdm, arg()["webserver-address"], arg().asNum("webserver-port")));
   d_ws->setApiKey(arg()["api-key"]);
   d_ws->setPassword(arg()["webserver-password"]);
+  d_ws->setLogLevel(arg()["webserver-loglevel"]);
 
   NetmaskGroup acl;
   acl.toMasks(::arg()["webserver-allow-from"]);
@@ -460,22 +512,23 @@ RecursorWebServer::RecursorWebServer(FDMultiplexer* fdm)
   d_ws->bind();
 
   // legacy dispatch
-  d_ws->registerApiHandler("/jsonstat", boost::bind(&RecursorWebServer::jsonstat, this, _1, _2));
+  d_ws->registerApiHandler("/jsonstat", boost::bind(&RecursorWebServer::jsonstat, this, _1, _2), true);
   d_ws->registerApiHandler("/api/v1/servers/localhost/cache/flush", &apiServerCacheFlush);
   d_ws->registerApiHandler("/api/v1/servers/localhost/config/allow-from", &apiServerConfigAllowFrom);
   d_ws->registerApiHandler("/api/v1/servers/localhost/config", &apiServerConfig);
   d_ws->registerApiHandler("/api/v1/servers/localhost/rpzstatistics", &apiServerRPZStats);
   d_ws->registerApiHandler("/api/v1/servers/localhost/search-data", &apiServerSearchData);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/statistics", &apiServerStatistics);
+  d_ws->registerApiHandler("/api/v1/servers/localhost/statistics", &apiServerStatistics, true);
   d_ws->registerApiHandler("/api/v1/servers/localhost/zones/<id>", &apiServerZoneDetail);
   d_ws->registerApiHandler("/api/v1/servers/localhost/zones", &apiServerZones);
-  d_ws->registerApiHandler("/api/v1/servers/localhost", &apiServerDetail);
+  d_ws->registerApiHandler("/api/v1/servers/localhost", &apiServerDetail, true);
   d_ws->registerApiHandler("/api/v1/servers", &apiServer);
   d_ws->registerApiHandler("/api", &apiDiscovery);
 
   for(const auto& u : g_urlmap) 
     d_ws->registerWebHandler("/"+u.first, serveStuff);
   d_ws->registerWebHandler("/", serveStuff);
+  d_ws->registerWebHandler("/metrics", prometheusMetrics);
   d_ws->go();
 }
 
@@ -620,49 +673,68 @@ void AsyncServer::newConnection()
 }
 
 // This is an entry point from FDM, so it needs to catch everything.
-void AsyncWebServer::serveConnection(std::shared_ptr<Socket> client) const
-try {
-  HttpRequest req;
-  YaHTTP::AsyncRequestLoader yarl;
-  yarl.initialize(&req);
-  client->setNonBlocking();
+void AsyncWebServer::serveConnection(std::shared_ptr<Socket> client) const {
+  const string logprefix = d_logprefix + to_string(getUniqueID()) + " ";
 
-  string data;
-  try {
-    while(!req.complete) {
-      int bytes = arecvtcp(data, 16384, client.get(), true);
-      if (bytes > 0) {
-        req.complete = yarl.feed(data);
-      } else {
-        // read error OR EOF
-        break;
-      }
-    }
-    yarl.finalize();
-  } catch (YaHTTP::ParseError &e) {
-    // request stays incomplete
-  }
-
+  HttpRequest req(logprefix);
   HttpResponse resp;
-  handleRequest(req, resp);
-  ostringstream ss;
-  resp.write(ss);
-  data = ss.str();
+  ComboAddress remote;
+  string reply;
 
-  // now send the reply
-  if (asendtcp(data, client.get()) == -1 || data.empty()) {
-    g_log<<Logger::Error<<"Failed sending reply to HTTP client"<<endl;
+  try {
+    YaHTTP::AsyncRequestLoader yarl;
+    yarl.initialize(&req);
+    client->setNonBlocking();
+
+    string data;
+    try {
+      while(!req.complete) {
+        int bytes = arecvtcp(data, 16384, client.get(), true);
+        if (bytes > 0) {
+          req.complete = yarl.feed(data);
+        } else {
+          // read error OR EOF
+          break;
+        }
+      }
+      yarl.finalize();
+    } catch (YaHTTP::ParseError &e) {
+      // request stays incomplete
+      g_log<<Logger::Warning<<logprefix<<"Unable to parse request: "<<e.what()<<endl;
+    }
+
+    if (d_loglevel >= WebServer::LogLevel::None) {
+      client->getRemote(remote);
+    }
+
+    logRequest(req, remote);
+
+    WebServer::handleRequest(req, resp);
+    ostringstream ss;
+    resp.write(ss);
+    reply = ss.str();
+
+    logResponse(resp, remote, logprefix);
+
+    // now send the reply
+    if (asendtcp(reply, client.get()) == -1 || reply.empty()) {
+      g_log<<Logger::Error<<logprefix<<"Failed sending reply to HTTP client"<<endl;
+    }
   }
-}
-catch(PDNSException &e) {
-  g_log<<Logger::Error<<"HTTP Exception: "<<e.reason<<endl;
-}
-catch(std::exception &e) {
-  if(strstr(e.what(), "timeout")==0)
-    g_log<<Logger::Error<<"HTTP STL Exception: "<<e.what()<<endl;
-}
-catch(...) {
-  g_log<<Logger::Error<<"HTTP: Unknown exception"<<endl;
+  catch(PDNSException &e) {
+    g_log<<Logger::Error<<logprefix<<"Exception: "<<e.reason<<endl;
+  }
+  catch(std::exception &e) {
+    if(strstr(e.what(), "timeout")==0)
+      g_log<<Logger::Error<<logprefix<<"STL Exception: "<<e.what()<<endl;
+  }
+  catch(...) {
+    g_log<<Logger::Error<<logprefix<<"Unknown exception"<<endl;
+  }
+
+  if (d_loglevel >= WebServer::LogLevel::Normal) {
+    g_log<<Logger::Notice<<logprefix<<remote<<" \""<<req.method<<" "<<req.url.path<<" HTTP/"<<req.versionStr(req.version)<<"\" "<<resp.status<<" "<<reply.size()<<endl;
+  }
 }
 
 void AsyncWebServer::go() {

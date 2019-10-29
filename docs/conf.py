@@ -59,7 +59,7 @@ author = 'PowerDNS.COM BV'
 # built documents.
 #
 # The short X.Y version.
-version = '4.2'
+#version = '4.2'
 # The full version, including alpha/beta/rc tags.
 #release = '4.1.1-pre'
 
@@ -93,7 +93,7 @@ changelog_render_pullreq = "https://github.com/PowerDNS/pdns/pull/%s"
 changelog_render_changeset = "https://github.com/PowerDNS/pdns/commit/%s"
 
 changelog_sections = ['New Features', 'Removed Features', 'Improvements', 'Bug Fixes']
-changelog_inner_tag_sort = ['Internals', 'API', 'Tools', 'ALIAS', 'DNSUpdate', 'BIND', 'MySQL', 'Postgresql', 'Oracle', 'LDAP', 'GeoIP', 'Remote']
+changelog_inner_tag_sort = ['Internals', 'API', 'Tools', 'ALIAS', 'DNSUpdate', 'BIND', 'MySQL', 'Postgresql', 'LDAP', 'GeoIP', 'Remote']
 
 changelog_render_tags = False
 
@@ -181,6 +181,7 @@ descriptions = {
     'dumresp': 'A dumb DNS responder',
     'ixfrdist': 'An IXFR/AXFR-only server that re-distributes zones',
     'ixplore': 'A tool that provides insights into IXFRs',
+    'nproxy': 'DNS notification proxy',
     'nsec3dig': 'Show and validate NSEC3 proofs',
     'pdns_control': 'Control the PowerDNS nameserver',
     'pdns_notify': 'A simple DNS NOTIFY sender',

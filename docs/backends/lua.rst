@@ -47,16 +47,16 @@ There is a couple of new functions for you to use in Lua:
 
 All these ``log_facilities`` is available: 
 
- * ``log_all`` 
- * ``log_ntlog`` 
- * ``log_alert`` 
- * ``log_critical`` 
- * ``log_error`` 
- * ``log_warning`` 
- * ``log_notice,`` 
- * ``log_info`` 
- * ``log_debug`` 
- * ``log_none``
+* ``log_all``
+* ``log_ntlog``
+* ``log_alert``
+* ``log_critical``
+* ``log_error``
+* ``log_warning``
+* ``log_notice,``
+* ``log_info``
+* ``log_debug``
+* ``log_none``
 
 ``dnspacket()``
 ~~~~~~~~~~~~~~~
@@ -65,6 +65,8 @@ This will give you back three parameters with ``remote_ip``,
 ``remote_port`` and ``local_ip`` in that order.
 
 Can only be used in the functions ``list()`` and ``getsoa()``.
+
+.. _backends_lua_fun_getarg:
 
 ``getarg("PARAMETER")``
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -75,8 +77,8 @@ pdns.conf file.
 ``mustdo("PARAMETER")``
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-This is the same as ```getarg()`` <#getarg>`__ but return a boolean
-instead of a string.
+This is the same as :ref:`getarg() <backends_lua_fun_getarg>`, but returns
+a boolean instead of a string.
 
 You also have all the different QTypes in a table called 'QTypes'.
 
@@ -102,9 +104,9 @@ The following script can be used to test the server:
 
 This will yield the following result:
 
-::
+.. code-block:: shell
 
-    $dig any www.test.com @127.0.0.1 -p5300 +multiline
+    $ dig any www.test.com @127.0.0.1 -p5300 +multiline
     ; <<>> DiG 9.7.3 <<>> any www.test.com @127.0.0.1 -p5300 +multiline
     ;; global options: +cmd
     ;; Got answer:
@@ -135,9 +137,9 @@ Parameters
 
 Path to your lua script, 'powerdns-luabackend.lua' by default.
 
-.. _setting-lua-logging-query:
+.. _setting-lua-query-logging:
 
-``lua-logging-query``
+``lua-query-logging``
 ~~~~~~~~~~~~~~~~~~~~~
 
 Log queries. default is 'no'.
@@ -152,7 +154,9 @@ luafunctions if you want. For example:
 
 .. _setting-lua-f_lookup:
 
-``lua-f_lookup = mynewfunction``
+.. code-block:: ini
+
+  lua-f_lookup = mynewfunction
 
 will call the function ``mynewfunction`` for the lookup-routine.
 
@@ -168,7 +172,9 @@ You can have an error function in Lua when Lua gives back a error.
 
 First make your error function then you put this in ``pdns.conf``:
 
-``lua-f_exec_error = YOUR_METHOD``
+.. code-block:: ini
+
+  lua-f_exec_error = YOUR_METHOD
 
 DNSSEC
 ------
@@ -189,7 +195,7 @@ called from the beginning.
 Information for logging
 -----------------------
 
-If you have the parameter ``query-logging`` or ``lua-logging-query`` set
+If you have the parameter ``query-logging`` or ``lua-query-logging`` set
 to true/yes/on, then you will see what is happening in each function
 when PowerDNS calls them.
 

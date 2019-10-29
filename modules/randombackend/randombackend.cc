@@ -22,11 +22,11 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include "pdns/utility.hh"
 #include "pdns/dnsbackend.hh"
 #include "pdns/dns.hh"
 #include "pdns/dnsbackend.hh"
 #include "pdns/dnspacket.hh"
+#include "pdns/dns_random.hh"
 #include "pdns/pdnsexception.hh"
 #include "pdns/logger.hh"
 #include "pdns/version.hh"
@@ -48,7 +48,7 @@ public:
     return false; // we don't support AXFR
   }
 
-  void lookup(const QType &type, const DNSName &qdomain, DNSPacket *p, int zoneId) override
+  void lookup(const QType &type, const DNSName &qdomain, int zoneId, DNSPacket *p) override
   {
     if(qdomain == d_ourdomain){
       if(type.getCode() == QType::SOA || type.getCode() == QType::ANY) {
@@ -59,7 +59,7 @@ public:
     } else if (qdomain == d_ourname) {
       if(type.getCode() == QType::A || type.getCode() == QType::ANY) {
         ostringstream os;
-        os<<Utility::random()%256<<"."<<Utility::random()%256<<"."<<Utility::random()%256<<"."<<Utility::random()%256;
+        os<<dns_random(256)<<"."<<dns_random(256)<<"."<<dns_random(256)<<"."<<dns_random(256);
         d_answer=os.str(); // our random ip address
       } else {
         d_answer="";

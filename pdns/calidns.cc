@@ -55,7 +55,7 @@ static po::variables_map g_vm;
 
 static bool g_quiet;
 
-static void* recvThread(const vector<Socket*>* sockets)
+static void* recvThread(const vector<std::unique_ptr<Socket>>* sockets)
 {
   vector<pollfd> rfds, fds;
   for(const auto& s : *sockets) {
@@ -68,37 +68,52 @@ static void* recvThread(const vector<Socket*>* sockets)
 
   int err;
 
+#if HAVE_RECVMMSG
   vector<struct mmsghdr> buf(100);
   for(auto& m : buf) {
-    fillMSGHdr(&m.msg_hdr, new struct iovec, new char[512], 512, new char[1500], 1500, new ComboAddress("127.0.0.1"));
+    cmsgbuf_aligned *cbuf = new cmsgbuf_aligned;
+    fillMSGHdr(&m.msg_hdr, new struct iovec, cbuf, sizeof(*cbuf), new char[1500], 1500, new ComboAddress("127.0.0.1"));
   }
+#else
+  struct msghdr buf;
+  cmsgbuf_aligned *cbuf = new cmsgbuf_aligned;
+  fillMSGHdr(&buf, new struct iovec, cbuf, sizeof(*cbuf), new char[1500], 1500, new ComboAddress("127.0.0.1"));
+#endif
 
   while(!g_done) {
     fds=rfds;
 
     err = poll(&fds[0], fds.size(), -1);
-    if(err < 0) {
-      if(errno==EINTR)
-	continue;
+    if (err < 0) {
+      if (errno == EINTR)
+        continue;
       unixDie("Unable to poll for new UDP events");
-    }    
-    
+    }
+
     for(auto &pfd : fds) {
-      if(pfd.revents & POLLIN) {
-	
-	if((err=recvmmsg(pfd.fd, &buf[0], buf.size(), MSG_WAITFORONE, 0)) < 0 ) {
-	  if(errno != EAGAIN)
-	    cerr<<"recvfrom gave error, ignoring: "<<strerror(errno)<<endl;
-	  unixDie("recvmmsg");
-	  continue;
-	}
-	g_recvcounter+=err;
-	for(int n=0; n < err; ++n)
-	  g_recvbytes += buf[n].msg_len;
+      if (pfd.revents & POLLIN) {
+#if HAVE_RECVMMSG
+        if ((err=recvmmsg(pfd.fd, &buf[0], buf.size(), MSG_WAITFORONE, 0)) < 0 ) {
+          if(errno != EAGAIN)
+            unixDie("recvmmsg");
+          continue;
+        }
+        g_recvcounter+=err;
+        for(int n=0; n < err; ++n)
+          g_recvbytes += buf[n].msg_len;
+#else
+        if ((err = recvmsg(pfd.fd, &buf, 0)) < 0) {
+          if (errno != EAGAIN)
+            unixDie("recvmsg");
+          continue;
+        }
+        g_recvcounter++;
+        for (unsigned int i = 0; i < buf.msg_iovlen; i++)
+          g_recvbytes += buf.msg_iov[i].iov_len;
+#endif
       }
     }
   }
-
   return 0;
 }
 
@@ -116,7 +131,7 @@ static void setSocketBuffer(int fd, int optname, uint32_t size)
 
   if (setsockopt(fd, SOL_SOCKET, optname, (char*)&size, sizeof(size)) < 0 ) {
     if (!g_quiet) {
-      cerr<<"Warning: unable to raise socket buffer size to "<<size<<": "<<strerror(errno)<<endl;
+      cerr<<"Warning: unable to raise socket buffer size to "<<size<<": "<<stringerror()<<endl;
     }
   }
 }
@@ -155,7 +170,7 @@ static void replaceEDNSClientSubnet(vector<uint8_t>* packet, const Netmask& ecsR
   memcpy(&packet->at(packetSize - sizeof(addr)), &addr, sizeof(addr));
 }
 
-static void sendPackets(const vector<Socket*>* sockets, const vector<vector<uint8_t>* >& packets, int qps, ComboAddress dest, const Netmask& ecsRange)
+static void sendPackets(const vector<std::unique_ptr<Socket>>& sockets, const vector<vector<uint8_t>* >& packets, int qps, ComboAddress dest, const Netmask& ecsRange)
 {
   unsigned int burst=100;
   const auto nsecPerBurst=1*(unsigned long)(burst*1000000000.0/qps);
@@ -170,7 +185,7 @@ static void sendPackets(const vector<Socket*>* sockets, const vector<vector<uint
   struct Unit {
     struct msghdr msgh;
     struct iovec iov;
-    char cbuf[256];
+    cmsgbuf_aligned cbuf;
   };
   vector<unique_ptr<Unit> > units;
   int ret;
@@ -184,11 +199,11 @@ static void sendPackets(const vector<Socket*>* sockets, const vector<vector<uint
       replaceEDNSClientSubnet(p, ecsRange);
     }
 
-    fillMSGHdr(&u.msgh, &u.iov, u.cbuf, 0, (char*)&(*p)[0], p->size(), &dest);
-    if((ret=sendmsg((*sockets)[count % sockets->size()]->getHandle(), 
+    fillMSGHdr(&u.msgh, &u.iov, nullptr, 0, (char*)&(*p)[0], p->size(), &dest);
+    if((ret=sendmsg(sockets[count % sockets.size()]->getHandle(), 
 		    &u.msgh, 0)))
       if(ret < 0)
-	unixDie("sendmmsg");
+	      unixDie("sendmsg");
     
     
     if(!(count%burst)) {
@@ -339,11 +354,13 @@ try
   struct sched_param param;
   param.sched_priority=99;
 
+#if HAVE_SCHED_SETSCHEDULER
   if(sched_setscheduler(0, SCHED_FIFO, &param) < 0) {
     if (!g_quiet) {
-      cerr<<"Unable to set SCHED_FIFO: "<<strerror(errno)<<endl;
+      cerr<<"Unable to set SCHED_FIFO: "<<stringerror()<<endl;
     }
   }
+#endif
 
   ifstream ifs(g_vm["query-file"].as<string>());
   string line;
@@ -377,7 +394,7 @@ try
 
     DNSPacketWriter pw(packet, DNSName(qname), DNSRecordContent::TypeToNumber(qtype));
     pw.getHeader()->rd=wantRecursion;
-    pw.getHeader()->id=random();
+    pw.getHeader()->id=dns_random_uint16();
 
     if(!subnet.empty() || !ecsRange.empty()) {
       EDNSSubnetOpts opt;
@@ -396,7 +413,7 @@ try
     cout<<"Generated "<<unknown.size()<<" ready to use queries"<<endl;
   }
   
-  vector<Socket*> sockets;
+  vector<std::unique_ptr<Socket>> sockets;
   ComboAddress dest;
   try {
     dest = ComboAddress(g_vm["destination"].as<string>(), 53);
@@ -406,11 +423,11 @@ try
     return EXIT_FAILURE;
   }
   for(int i=0; i < 24; ++i) {
-    Socket *sock = new Socket(dest.sin4.sin_family, SOCK_DGRAM);
+    auto sock = make_unique<Socket>(dest.sin4.sin_family, SOCK_DGRAM);
     //    sock->connect(dest);
     setSocketSendBuffer(sock->getHandle(), 2000000);
     setSocketReceiveBuffer(sock->getHandle(), 2000000);
-    sockets.push_back(sock);
+    sockets.push_back(std::move(sock));
   }
   new thread(recvThread, &sockets);
   uint32_t qps;
@@ -419,7 +436,7 @@ try
   if (g_vm.count("plot-file")) {
     plot.open(g_vm["plot-file"].as<string>());
     if (!plot) {
-      cerr<<"Error opening "<<g_vm["plot-file"].as<string>()<<" for writing: "<<strerror(errno)<<endl;
+      cerr<<"Error opening "<<g_vm["plot-file"].as<string>()<<" for writing: "<<stringerror()<<endl;
       return EXIT_FAILURE;
     }
   }
@@ -454,7 +471,7 @@ try
       known.push_back(ptr);
     }
     for(;n < total; ++n) {
-      toSend.push_back(known[random()%known.size()].get());
+      toSend.push_back(known[dns_random(known.size())].get());
     }
     random_shuffle(toSend.begin(), toSend.end());
     g_recvcounter.store(0);
@@ -462,7 +479,7 @@ try
     DTime dt;
     dt.set();
 
-    sendPackets(&sockets, toSend, qps, dest, ecsRange);
+    sendPackets(sockets, toSend, qps, dest, ecsRange);
     
     const auto udiff = dt.udiffNoReset();
     const auto realqps=toSend.size()/(udiff/1000000.0);

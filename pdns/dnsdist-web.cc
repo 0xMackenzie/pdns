@@ -323,6 +323,8 @@ static void connectionThread(int sock, ComboAddress remote)
         };
 
         for(const auto& e : g_stats.entries) {
+          if (e.first == "special-memory-usage")
+            continue; // Too expensive for get-all
           if(const auto& val = boost::get<DNSDistStats::stat_t*>(&e.second))
             obj.insert({e.first, (double)(*val)->load()});
           else if (const auto& dval = boost::get<double*>(&e.second))
@@ -404,14 +406,19 @@ static void connectionThread(int sock, ComboAddress remote)
         resp.status = 200;
 
         std::ostringstream output;
+        static const std::set<std::string> metricBlacklist = { "latency-count", "latency-sum" };
         for (const auto& e : g_stats.entries) {
+          if (e.first == "special-memory-usage")
+            continue; // Too expensive for get-all
           std::string metricName = std::get<0>(e);
 
           // Prometheus suggest using '_' instead of '-'
           std::string prometheusMetricName = "dnsdist_" + boost::replace_all_copy(metricName, "-", "_");
+          if (metricBlacklist.count(metricName) != 0) {
+            continue;
+          }
 
           MetricDefinition metricDetails;
-
           if (!g_metricDefinitions.getMetricDetails(metricName, metricDetails)) {
               vinfolog("Do not have metric details for %s", metricName);
               continue;
@@ -439,23 +446,59 @@ static void connectionThread(int sock, ComboAddress remote)
           output << "\n";
         }
 
+        // Latency histogram buckets
+        output << "# HELP dnsdist_latency Histogram of responses by latency\n";
+        output << "# TYPE dnsdist_latency histogram\n";
+        uint64_t latency_amounts = g_stats.latency0_1;
+        output << "dnsdist_latency_bucket{le=\"1\"} " << latency_amounts << "\n";
+        latency_amounts += g_stats.latency1_10;
+        output << "dnsdist_latency_bucket{le=\"10\"} " << latency_amounts << "\n";
+        latency_amounts += g_stats.latency10_50;
+        output << "dnsdist_latency_bucket{le=\"50\"} " << latency_amounts << "\n";
+        latency_amounts += g_stats.latency50_100;
+        output << "dnsdist_latency_bucket{le=\"100\"} " << latency_amounts << "\n";
+        latency_amounts += g_stats.latency100_1000;
+        output << "dnsdist_latency_bucket{le=\"1000\"} " << latency_amounts << "\n";
+        latency_amounts += g_stats.latencySlow; // Should be the same as latency_count
+        output << "dnsdist_latency_bucket{le=\"+Inf\"} " << latency_amounts << "\n";
+        output << "dnsdist_latency_sum " << g_stats.latencySum << "\n";
+        output << "dnsdist_latency_count " << getLatencyCount(std::string()) << "\n";
+
         auto states = g_dstates.getLocal();
         const string statesbase = "dnsdist_server_";
 
-        output << "# HELP " << statesbase << "queries "     << "Amount of queries relayed to server"                               << "\n";
-        output << "# TYPE " << statesbase << "queries "     << "counter"                                                           << "\n";
-        output << "# HELP " << statesbase << "drops "       << "Amount of queries not answered by server"                          << "\n";
-        output << "# TYPE " << statesbase << "drops "       << "counter"                                                           << "\n";
-        output << "# HELP " << statesbase << "latency "     << "Server's latency when answering questions in miliseconds"          << "\n";
-        output << "# TYPE " << statesbase << "latency "     << "gauge"                                                             << "\n";
-        output << "# HELP " << statesbase << "senderrors "  << "Total number of OS snd errors while relaying queries"              << "\n";
-        output << "# TYPE " << statesbase << "senderrors "  << "counter"                                                           << "\n";
-        output << "# HELP " << statesbase << "outstanding " << "Current number of queries that are waiting for a backend response" << "\n";
-        output << "# TYPE " << statesbase << "outstanding " << "gauge"                                                             << "\n";
-        output << "# HELP " << statesbase << "order "       << "The order in which this server is picked"                          << "\n";
-        output << "# TYPE " << statesbase << "order "       << "gauge"                                                             << "\n";
-        output << "# HELP " << statesbase << "weight "      << "The weight within the order in which this server is picked"        << "\n";
-        output << "# TYPE " << statesbase << "weight "      << "gauge"                                                             << "\n";
+        output << "# HELP " << statesbase << "queries "                << "Amount of queries relayed to server"                               << "\n";
+        output << "# TYPE " << statesbase << "queries "                << "counter"                                                           << "\n";
+        output << "# HELP " << statesbase << "responses "              << "Amount of responses received from this server"                     << "\n";
+        output << "# TYPE " << statesbase << "responses "              << "counter"                                                           << "\n";
+        output << "# HELP " << statesbase << "drops "                  << "Amount of queries not answered by server"                          << "\n";
+        output << "# TYPE " << statesbase << "drops "                  << "counter"                                                           << "\n";
+        output << "# HELP " << statesbase << "latency "                << "Server's latency when answering questions in milliseconds"         << "\n";
+        output << "# TYPE " << statesbase << "latency "                << "gauge"                                                             << "\n";
+        output << "# HELP " << statesbase << "senderrors "             << "Total number of OS send errors while relaying queries"              << "\n";
+        output << "# TYPE " << statesbase << "senderrors "             << "counter"                                                           << "\n";
+        output << "# HELP " << statesbase << "outstanding "            << "Current number of queries that are waiting for a backend response" << "\n";
+        output << "# TYPE " << statesbase << "outstanding "            << "gauge"                                                             << "\n";
+        output << "# HELP " << statesbase << "order "                  << "The order in which this server is picked"                          << "\n";
+        output << "# TYPE " << statesbase << "order "                  << "gauge"                                                             << "\n";
+        output << "# HELP " << statesbase << "weight "                 << "The weight within the order in which this server is picked"        << "\n";
+        output << "# TYPE " << statesbase << "weight "                 << "gauge"                                                             << "\n";
+        output << "# HELP " << statesbase << "tcpdiedsendingquery "    << "The number of TCP I/O errors while sending the query"              << "\n";
+        output << "# TYPE " << statesbase << "tcpdiedsendingquery "    << "counter"                                                           << "\n";
+        output << "# HELP " << statesbase << "tcpdiedreadingresponse " << "The number of TCP I/O errors while reading the response"           << "\n";
+        output << "# TYPE " << statesbase << "tcpdiedreadingresponse " << "counter"                                                           << "\n";
+        output << "# HELP " << statesbase << "tcpgaveup "              << "The number of TCP connections failing after too many attempts"     << "\n";
+        output << "# TYPE " << statesbase << "tcpgaveup "              << "counter"                                                           << "\n";
+        output << "# HELP " << statesbase << "tcpreadtimeouts "        << "The number of TCP read timeouts"                                   << "\n";
+        output << "# TYPE " << statesbase << "tcpreadtimeouts "        << "counter"                                                           << "\n";
+        output << "# HELP " << statesbase << "tcpwritetimeouts "       << "The number of TCP write timeouts"                                  << "\n";
+        output << "# TYPE " << statesbase << "tcpwritetimeouts "       << "counter"                                                           << "\n";
+        output << "# HELP " << statesbase << "tcpcurrentconnections "  << "The number of current TCP connections"                             << "\n";
+        output << "# TYPE " << statesbase << "tcpcurrentconnections "  << "gauge"                                                             << "\n";
+        output << "# HELP " << statesbase << "tcpavgqueriesperconn "   << "The average number of queries per TCP connection"                  << "\n";
+        output << "# TYPE " << statesbase << "tcpavgqueriesperconn "   << "gauge"                                                             << "\n";
+        output << "# HELP " << statesbase << "tcpavgconnduration "     << "The average duration of a TCP connection (ms)"                     << "\n";
+        output << "# TYPE " << statesbase << "tcpavgconnduration "     << "gauge"                                                             << "\n";
 
         for (const auto& state : *states) {
           string serverName;
@@ -470,28 +513,205 @@ static void connectionThread(int sock, ComboAddress remote)
           const std::string label = boost::str(boost::format("{server=\"%1%\",address=\"%2%\"}")
             % serverName % state->remote.toStringWithPort());
 
-          output << statesbase << "queries"     << label << " " << state->queries.load()     << "\n";
-          output << statesbase << "drops"       << label << " " << state->reuseds.load()     << "\n";
-          output << statesbase << "latency"     << label << " " << state->latencyUsec/1000.0 << "\n";
-          output << statesbase << "senderrors"  << label << " " << state->sendErrors.load()  << "\n";
-          output << statesbase << "outstanding" << label << " " << state->outstanding.load() << "\n";
-          output << statesbase << "order"       << label << " " << state->order              << "\n";
-          output << statesbase << "weight"      << label << " " << state->weight             << "\n";
+          output << statesbase << "queries"                << label << " " << state->queries.load()             << "\n";
+          output << statesbase << "responses"              << label << " " << state->responses.load()           << "\n";
+          output << statesbase << "drops"                  << label << " " << state->reuseds.load()             << "\n";
+          output << statesbase << "latency"                << label << " " << state->latencyUsec/1000.0         << "\n";
+          output << statesbase << "senderrors"             << label << " " << state->sendErrors.load()          << "\n";
+          output << statesbase << "outstanding"            << label << " " << state->outstanding.load()         << "\n";
+          output << statesbase << "order"                  << label << " " << state->order                      << "\n";
+          output << statesbase << "weight"                 << label << " " << state->weight                     << "\n";
+          output << statesbase << "tcpdiedsendingquery"    << label << " " << state->tcpDiedSendingQuery        << "\n";
+          output << statesbase << "tcpdiedreadingresponse" << label << " " << state->tcpDiedReadingResponse     << "\n";
+          output << statesbase << "tcpgaveup"              << label << " " << state->tcpGaveUp                  << "\n";
+          output << statesbase << "tcpreadtimeouts"        << label << " " << state->tcpReadTimeouts            << "\n";
+          output << statesbase << "tcpwritetimeouts"       << label << " " << state->tcpWriteTimeouts           << "\n";
+          output << statesbase << "tcpcurrentconnections"  << label << " " << state->tcpCurrentConnections      << "\n";
+          output << statesbase << "tcpavgqueriesperconn"   << label << " " << state->tcpAvgQueriesPerConnection << "\n";
+          output << statesbase << "tcpavgconnduration"     << label << " " << state->tcpAvgConnectionDuration   << "\n";
         }
 
+        const string frontsbase = "dnsdist_frontend_";
+        output << "# HELP " << frontsbase << "queries " << "Amount of queries received by this frontend" << "\n";
+        output << "# TYPE " << frontsbase << "queries " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "responses " << "Amount of responses sent by this frontend" << "\n";
+        output << "# TYPE " << frontsbase << "responses " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tcpdiedreadingquery " << "Amount of TCP connections terminated while reading the query from the client" << "\n";
+        output << "# TYPE " << frontsbase << "tcpdiedreadingquery " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tcpdiedsendingresponse " << "Amount of TCP connections terminated while sending a response to the client" << "\n";
+        output << "# TYPE " << frontsbase << "tcpdiedsendingresponse " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tcpgaveup " << "Amount of TCP connections terminated after too many attempts to get a connection to the backend" << "\n";
+        output << "# TYPE " << frontsbase << "tcpgaveup " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tcpclientimeouts " << "Amount of TCP connections terminated by a timeout while reading from the client" << "\n";
+        output << "# TYPE " << frontsbase << "tcpclientimeouts " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tcpdownstreamtimeouts " << "Amount of TCP connections terminated by a timeout while reading from the backend" << "\n";
+        output << "# TYPE " << frontsbase << "tcpdownstreamtimeouts " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tcpcurrentconnections " << "Amount of current incoming TCP connections from clients" << "\n";
+        output << "# TYPE " << frontsbase << "tcpcurrentconnections " << "gauge" << "\n";
+        output << "# HELP " << frontsbase << "tcpavgqueriesperconnection " << "The average number of queries per TCP connection" << "\n";
+        output << "# TYPE " << frontsbase << "tcpavgqueriesperconnection " << "gauge" << "\n";
+        output << "# HELP " << frontsbase << "tcpavgconnectionduration " << "The average duration of a TCP connection (ms)" << "\n";
+        output << "# TYPE " << frontsbase << "tcpavgconnectionduration " << "gauge" << "\n";
+        output << "# HELP " << frontsbase << "tlsqueries " << "Number of queries received by dnsdist over TLS, by TLS version" << "\n";
+        output << "# TYPE " << frontsbase << "tlsqueries " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tlsnewsessions " << "Amount of new TLS sessions negotiated" << "\n";
+        output << "# TYPE " << frontsbase << "tlsnewsessions " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tlsresumptions " << "Amount of TLS sessions resumed" << "\n";
+        output << "# TYPE " << frontsbase << "tlsresumptions " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tlsunknownticketkeys " << "Amount of attempts to resume TLS session from an unknown key (possibly expired)" << "\n";
+        output << "# TYPE " << frontsbase << "tlsunknownticketkeys " << "counter" << "\n";
+        output << "# HELP " << frontsbase << "tlsinactiveticketkeys " << "Amount of TLS sessions resumed from an inactive key" << "\n";
+        output << "# TYPE " << frontsbase << "tlsinactiveticketkeys " << "counter" << "\n";
+
+        output << "# HELP " << frontsbase << "tlshandshakefailures " << "Amount of TLS handshake failures" << "\n";
+        output << "# TYPE " << frontsbase << "tlshandshakefailures " << "counter" << "\n";
+
+        std::map<std::string,uint64_t> frontendDuplicates;
         for (const auto& front : g_frontends) {
           if (front->udpFD == -1 && front->tcpFD == -1)
             continue;
 
-          string frontName = front->local.toString() + ":" + std::to_string(front->local.getPort());
-          string proto = (front->udpFD >= 0 ? "udp" : "tcp");
+          const string frontName = front->local.toString() + ":" + std::to_string(front->local.getPort());
+          const string proto = front->getType();
+          const string fullName = frontName + "_" + proto;
+          uint64_t threadNumber = 0;
+          auto dupPair = frontendDuplicates.insert({fullName, 1});
+          if (!dupPair.second) {
+            threadNumber = dupPair.first->second;
+            ++(dupPair.first->second);
+          }
+          const std::string label = boost::str(boost::format("{frontend=\"%1%\",proto=\"%2%\",thread=\"%3%\"} ")
+            % frontName % proto % threadNumber);
 
-          output << "dnsdist_frontend_queries{frontend=\"" << frontName << "\",proto=\"" << proto
-              << "\"} " << front->queries.load() << "\n";
+          output << frontsbase << "queries" << label << front->queries.load() << "\n";
+          output << frontsbase << "responses" << label << front->responses.load() << "\n";
+          if (front->isTCP()) {
+            output << frontsbase << "tcpdiedreadingquery" << label << front->tcpDiedReadingQuery.load() << "\n";
+            output << frontsbase << "tcpdiedsendingresponse" << label << front->tcpDiedSendingResponse.load() << "\n";
+            output << frontsbase << "tcpgaveup" << label << front->tcpGaveUp.load() << "\n";
+            output << frontsbase << "tcpclientimeouts" << label << front->tcpClientTimeouts.load() << "\n";
+            output << frontsbase << "tcpdownstreamtimeouts" << label << front->tcpDownstreamTimeouts.load() << "\n";
+            output << frontsbase << "tcpcurrentconnections" << label << front->tcpCurrentConnections.load() << "\n";
+            output << frontsbase << "tcpavgqueriesperconnection" << label << front->tcpAvgQueriesPerConnection.load() << "\n";
+            output << frontsbase << "tcpavgconnectionduration" << label << front->tcpAvgConnectionDuration.load() << "\n";
+            if (front->hasTLS()) {
+              output << frontsbase << "tlsnewsessions" << label << front->tlsNewSessions.load() << "\n";
+              output << frontsbase << "tlsresumptions" << label << front->tlsResumptions.load() << "\n";
+              output << frontsbase << "tlsunknownticketkeys" << label << front->tlsUnknownTicketKey.load() << "\n";
+              output << frontsbase << "tlsinactiveticketkeys" << label << front->tlsInactiveTicketKey.load() << "\n";
+
+              output << frontsbase << "tlsqueries{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",tls=\"tls10\"} " << front->tls10queries.load() << "\n";
+              output << frontsbase << "tlsqueries{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",tls=\"tls11\"} " << front->tls11queries.load() << "\n";
+              output << frontsbase << "tlsqueries{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",tls=\"tls12\"} " << front->tls12queries.load() << "\n";
+              output << frontsbase << "tlsqueries{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",tls=\"tls13\"} " << front->tls13queries.load() << "\n";
+              output << frontsbase << "tlsqueries{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",tls=\"unknown\"} " << front->tlsUnknownqueries.load() << "\n";
+
+              const TLSErrorCounters* errorCounters = nullptr;
+              if (front->tlsFrontend != nullptr) {
+                errorCounters = &front->tlsFrontend->d_tlsCounters;
+              }
+              else if (front->dohFrontend != nullptr) {
+                errorCounters = &front->dohFrontend->d_tlsCounters;
+              }
+
+              if (errorCounters != nullptr) {
+                output << frontsbase << "tlshandshakefailures{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",error=\"dhKeyTooSmall\"} " << errorCounters->d_dhKeyTooSmall << "\n";
+                output << frontsbase << "tlshandshakefailures{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",error=\"inappropriateFallBack\"} " << errorCounters->d_inappropriateFallBack << "\n";
+                output << frontsbase << "tlshandshakefailures{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",error=\"noSharedCipher\"} " << errorCounters->d_noSharedCipher << "\n";
+                output << frontsbase << "tlshandshakefailures{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",error=\"unknownCipherType\"} " << errorCounters->d_unknownCipherType << "\n";
+                output << frontsbase << "tlshandshakefailures{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",error=\"unknownKeyExchangeType\"} " << errorCounters->d_unknownKeyExchangeType << "\n";
+                output << frontsbase << "tlshandshakefailures{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",error=\"unknownProtocol\"} " << errorCounters->d_unknownProtocol << "\n";
+                output << frontsbase << "tlshandshakefailures{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",error=\"unsupportedEC\"} " << errorCounters->d_unsupportedEC << "\n";
+                output << frontsbase << "tlshandshakefailures{frontend=\"" << frontName << "\",proto=\"" << proto << "\",thread=\"" << threadNumber << "\",error=\"unsupportedProtocol{\"} " << errorCounters->d_unsupportedProtocol << "\n";
+              }
+            }
+          }
         }
+
+        output << "# HELP " << frontsbase << "http_connects " << "Number of DoH TCP connections established to this frontend" << "\n";
+        output << "# TYPE " << frontsbase << "http_connects " << "counter" << "\n";
+
+        output << "# HELP " << frontsbase << "doh_http_method_queries " << "Number of DoH queries received by dnsdist, by HTTP method" << "\n";
+        output << "# TYPE " << frontsbase << "doh_http_method_queries " << "counter" << "\n";
+
+        output << "# HELP " << frontsbase << "doh_http_version_queries " << "Number of DoH queries received by dnsdist, by HTTP version" << "\n";
+        output << "# TYPE " << frontsbase << "doh_http_version_queries " << "counter" << "\n";
+
+        output << "# HELP " << frontsbase << "doh_bad_requests " << "Number of requests that could not be converted to a DNS query" << "\n";
+        output << "# TYPE " << frontsbase << "doh_bad_requests " << "counter" << "\n";
+
+        output << "# HELP " << frontsbase << "doh_responses " << "Number of responses sent, by type" << "\n";
+        output << "# TYPE " << frontsbase << "doh_responses " << "counter" << "\n";
+
+        output << "# HELP " << frontsbase << "doh_version_status_responses " << "Number of requests that could not be converted to a DNS query" << "\n";
+        output << "# TYPE " << frontsbase << "doh_version_status_responses " << "counter" << "\n";
+
+#ifdef HAVE_DNS_OVER_HTTPS
+        std::map<std::string,uint64_t> dohFrontendDuplicates;
+        for(const auto& doh : g_dohlocals) {
+          const string frontName = doh->d_local.toStringWithPort();
+          uint64_t threadNumber = 0;
+          auto dupPair = frontendDuplicates.insert({frontName, 1});
+          if (!dupPair.second) {
+            threadNumber = dupPair.first->second;
+            ++(dupPair.first->second);
+          }
+          const std::string addrlabel = boost::str(boost::format("frontend=\"%1%\",thread=\"%2%\"") % frontName % threadNumber);
+          const std::string label = "{" + addrlabel + "} ";
+
+          output << frontsbase << "http_connects" << label << doh->d_httpconnects << "\n";
+          output << frontsbase << "doh_http_method_queries{method=\"get\"," << addrlabel << "} " << doh->d_getqueries << "\n";
+          output << frontsbase << "doh_http_method_queries{method=\"post\"," << addrlabel << "} " << doh->d_postqueries << "\n";
+
+          output << frontsbase << "doh_http_version_queries{version=\"1\"," << addrlabel << "} " << doh->d_http1Stats.d_nbQueries << "\n";
+          output << frontsbase << "doh_http_version_queries{version=\"2\"," << addrlabel << "} " << doh->d_http2Stats.d_nbQueries << "\n";
+
+          output << frontsbase << "doh_bad_requests{" << addrlabel << "} " << doh->d_badrequests << "\n";
+
+          output << frontsbase << "doh_responses{type=\"error\"," << addrlabel << "} " << doh->d_errorresponses << "\n";
+          output << frontsbase << "doh_responses{type=\"redirect\"," << addrlabel << "} " << doh->d_redirectresponses << "\n";
+          output << frontsbase << "doh_responses{type=\"valid\"," << addrlabel << "} " << doh->d_validresponses << "\n";
+
+          output << frontsbase << "doh_version_status_responses{httpversion=\"1\",status=\"200\"," << addrlabel << "} " << doh->d_http1Stats.d_nb200Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"1\",status=\"400\"," << addrlabel << "} " << doh->d_http1Stats.d_nb400Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"1\",status=\"403\"," << addrlabel << "} " << doh->d_http1Stats.d_nb403Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"1\",status=\"500\"," << addrlabel << "} " << doh->d_http1Stats.d_nb500Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"1\",status=\"502\"," << addrlabel << "} " << doh->d_http1Stats.d_nb502Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"1\",status=\"other\"," << addrlabel << "} " << doh->d_http1Stats.d_nbOtherResponses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"2\",status=\"200\"," << addrlabel << "} " << doh->d_http2Stats.d_nb200Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"2\",status=\"400\"," << addrlabel << "} " << doh->d_http2Stats.d_nb400Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"2\",status=\"403\"," << addrlabel << "} " << doh->d_http2Stats.d_nb403Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"2\",status=\"500\"," << addrlabel << "} " << doh->d_http2Stats.d_nb500Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"2\",status=\"502\"," << addrlabel << "} " << doh->d_http2Stats.d_nb502Responses << "\n";
+          output << frontsbase << "doh_version_status_responses{httpversion=\"2\",status=\"other\"," << addrlabel << "} " << doh->d_http2Stats.d_nbOtherResponses << "\n";
+        }
+#endif /* HAVE_DNS_OVER_HTTPS */
 
         auto localPools = g_pools.getLocal();
         const string cachebase = "dnsdist_pool_";
+        output << "# HELP dnsdist_pool_servers " << "Number of servers in that pool" << "\n";
+        output << "# TYPE dnsdist_pool_servers " << "gauge" << "\n";
+        output << "# HELP dnsdist_pool_active_servers " << "Number of available servers in that pool" << "\n";
+        output << "# TYPE dnsdist_pool_active_servers " << "gauge" << "\n";
+
+        output << "# HELP dnsdist_pool_cache_size " << "Maximum number of entries that this cache can hold" << "\n";
+        output << "# TYPE dnsdist_pool_cache_size " << "gauge" << "\n";
+        output << "# HELP dnsdist_pool_cache_entries " << "Number of entries currently present in that cache" << "\n";
+        output << "# TYPE dnsdist_pool_cache_entries " << "gauge" << "\n";
+        output << "# HELP dnsdist_pool_cache_hits " << "Number of hits from that cache" << "\n";
+        output << "# TYPE dnsdist_pool_cache_hits " << "counter" << "\n";
+        output << "# HELP dnsdist_pool_cache_misses " << "Number of misses from that cache" << "\n";
+        output << "# TYPE dnsdist_pool_cache_misses " << "counter" << "\n";
+        output << "# HELP dnsdist_pool_cache_deferred_inserts " << "Number of insertions into that cache skipped because it was already locked" << "\n";
+        output << "# TYPE dnsdist_pool_cache_deferred_inserts " << "counter" << "\n";
+        output << "# HELP dnsdist_pool_cache_deferred_lookups " << "Number of lookups into that cache skipped because it was already locked" << "\n";
+        output << "# TYPE dnsdist_pool_cache_deferred_lookups " << "counter" << "\n";
+        output << "# HELP dnsdist_pool_cache_lookup_collisions " << "Number of lookups into that cache that triggered a collision (same hash but different entry)" << "\n";
+        output << "# TYPE dnsdist_pool_cache_lookup_collisions " << "counter" << "\n";
+        output << "# HELP dnsdist_pool_cache_insert_collisions " << "Number of insertions into that cache that triggered a collision (same hash but different entry)" << "\n";
+        output << "# TYPE dnsdist_pool_cache_insert_collisions " << "counter" << "\n";
+        output << "# HELP dnsdist_pool_cache_ttl_too_shorts " << "Number of insertions into that cache skipped because the TTL of the answer was not long enough" << "\n";
+        output << "# TYPE dnsdist_pool_cache_ttl_too_shorts " << "counter" << "\n";
 
         for (const auto& entry : *localPools) {
           string poolName = entry.first;
@@ -557,7 +777,16 @@ static void connectionThread(int sock, ComboAddress remote)
           {"pools", pools},
           {"latency", (double)(a->latencyUsec/1000.0)},
           {"queries", (double)a->queries},
+          {"responses", (double)a->responses},
           {"sendErrors", (double)a->sendErrors},
+          {"tcpDiedSendingQuery", (double)a->tcpDiedSendingQuery},
+          {"tcpDiedReadingResponse", (double)a->tcpDiedReadingResponse},
+          {"tcpGaveUp", (double)a->tcpGaveUp},
+          {"tcpReadTimeouts", (double)a->tcpReadTimeouts},
+          {"tcpWriteTimeouts", (double)a->tcpWriteTimeouts},
+          {"tcpCurrentConnections", (double)a->tcpCurrentConnections},
+          {"tcpAvgQueriesPerConnection", (double)a->tcpAvgQueriesPerConnection},
+          {"tcpAvgConnectionDuration", (double)a->tcpAvgConnectionDuration},
           {"dropRate", (double)a->dropRate}
         };
 
@@ -579,10 +808,81 @@ static void connectionThread(int sock, ComboAddress remote)
           { "address", front->local.toStringWithPort() },
           { "udp", front->udpFD >= 0 },
           { "tcp", front->tcpFD >= 0 },
-          { "queries", (double) front->queries.load() }
+          { "type", front->getType() },
+          { "queries", (double) front->queries.load() },
+          { "responses", (double) front->responses.load() },
+          { "tcpDiedReadingQuery", (double) front->tcpDiedReadingQuery.load() },
+          { "tcpDiedSendingResponse", (double) front->tcpDiedSendingResponse.load() },
+          { "tcpGaveUp", (double) front->tcpGaveUp.load() },
+          { "tcpClientTimeouts", (double) front->tcpClientTimeouts },
+          { "tcpDownstreamTimeouts", (double) front->tcpDownstreamTimeouts },
+          { "tcpCurrentConnections", (double) front->tcpCurrentConnections },
+          { "tcpAvgQueriesPerConnection", (double) front->tcpAvgQueriesPerConnection },
+          { "tcpAvgConnectionDuration", (double) front->tcpAvgConnectionDuration },
+          { "tlsNewSessions", (double) front->tlsNewSessions },
+          { "tlsResumptions", (double) front->tlsResumptions },
+          { "tlsUnknownTicketKey", (double) front->tlsUnknownTicketKey },
+          { "tlsInactiveTicketKey", (double) front->tlsInactiveTicketKey },
+          { "tls10Queries", (double) front->tls10queries },
+          { "tls11Queries", (double) front->tls11queries },
+          { "tls12Queries", (double) front->tls12queries },
+          { "tls13Queries", (double) front->tls13queries },
+          { "tlsUnknownQueries", (double) front->tlsUnknownqueries },
         };
+        const TLSErrorCounters* errorCounters = nullptr;
+        if (front->tlsFrontend != nullptr) {
+          errorCounters = &front->tlsFrontend->d_tlsCounters;
+        }
+        else if (front->dohFrontend != nullptr) {
+          errorCounters = &front->dohFrontend->d_tlsCounters;
+        }
+        if (errorCounters != nullptr) {
+          frontend["tlsHandshakeFailuresDHKeyTooSmall"] = (double)errorCounters->d_dhKeyTooSmall;
+          frontend["tlsHandshakeFailuresInappropriateFallBack"] = (double)errorCounters->d_inappropriateFallBack;
+          frontend["tlsHandshakeFailuresNoSharedCipher"] = (double)errorCounters->d_noSharedCipher;
+          frontend["tlsHandshakeFailuresUnknownCipher"] = (double)errorCounters->d_unknownCipherType;
+          frontend["tlsHandshakeFailuresUnknownKeyExchangeType"] = (double)errorCounters->d_unknownKeyExchangeType;
+          frontend["tlsHandshakeFailuresUnknownProtocol"] = (double)errorCounters->d_unknownProtocol;
+          frontend["tlsHandshakeFailuresUnsupportedEC"] = (double)errorCounters->d_unsupportedEC;
+          frontend["tlsHandshakeFailuresUnsupportedProtocol"] = (double)errorCounters->d_unsupportedProtocol;
+        }
         frontends.push_back(frontend);
       }
+
+      Json::array dohs;
+#ifdef HAVE_DNS_OVER_HTTPS
+      {
+        num = 0;
+        for(const auto& doh : g_dohlocals) {
+          Json::object obj{
+            { "id", num++ },
+            { "address", doh->d_local.toStringWithPort() },
+            { "http-connects", (double) doh->d_httpconnects },
+            { "http1-queries", (double) doh->d_http1Stats.d_nbQueries },
+            { "http2-queries", (double) doh->d_http2Stats.d_nbQueries },
+            { "http1-200-responses", (double) doh->d_http1Stats.d_nb200Responses },
+            { "http2-200-responses", (double) doh->d_http2Stats.d_nb200Responses },
+            { "http1-400-responses", (double) doh->d_http1Stats.d_nb400Responses },
+            { "http2-400-responses", (double) doh->d_http2Stats.d_nb400Responses },
+            { "http1-403-responses", (double) doh->d_http1Stats.d_nb403Responses },
+            { "http2-403-responses", (double) doh->d_http2Stats.d_nb403Responses },
+            { "http1-500-responses", (double) doh->d_http1Stats.d_nb500Responses },
+            { "http2-500-responses", (double) doh->d_http2Stats.d_nb500Responses },
+            { "http1-502-responses", (double) doh->d_http1Stats.d_nb502Responses },
+            { "http2-502-responses", (double) doh->d_http2Stats.d_nb502Responses },
+            { "http1-other-responses", (double) doh->d_http1Stats.d_nbOtherResponses },
+            { "http2-other-responses", (double) doh->d_http2Stats.d_nbOtherResponses },
+            { "get-queries", (double) doh->d_getqueries },
+            { "post-queries", (double) doh->d_postqueries },
+            { "bad-requests", (double) doh->d_badrequests },
+            { "error-responses", (double) doh->d_errorresponses },
+            { "redirect-responses", (double) doh->d_redirectresponses },
+            { "valid-responses", (double) doh->d_validresponses }
+          };
+          dohs.push_back(obj);
+        }
+      }
+#endif /* HAVE_DNS_OVER_HTTPS */
 
       Json::array pools;
       auto localPools = g_pools.getLocal();
@@ -635,10 +935,16 @@ static void connectionThread(int sock, ComboAddress remote)
         if(!acl.empty()) acl += ", ";
         acl+=s;
       }
-      string localaddresses;
-      for(const auto& loc : g_locals) {
-        if(!localaddresses.empty()) localaddresses += ", ";
-        localaddresses += std::get<0>(loc).toStringWithPort();
+      string localaddressesStr;
+      std::set<std::string> localaddresses;
+      for(const auto& front : g_frontends) {
+        localaddresses.insert(front->local.toStringWithPort());
+      }
+      for (const auto& addr : localaddresses) {
+        if (!localaddressesStr.empty()) {
+          localaddressesStr += ", ";
+        }
+        localaddressesStr += addr;
       }
 
       Json my_json = Json::object {
@@ -652,7 +958,8 @@ static void connectionThread(int sock, ComboAddress remote)
         { "cache-hit-response-rules", cacheHitResponseRules},
         { "self-answered-response-rules", selfAnsweredResponseRules},
         { "acl", acl},
-        { "local", localaddresses}
+        { "local", localaddressesStr},
+        { "dohFrontends", dohs }
       };
       resp.headers["Content-Type"] = "application/json";
       resp.body=my_json.dump();
@@ -663,6 +970,9 @@ static void connectionThread(int sock, ComboAddress remote)
 
       Json::array doc;
       for(const auto& item : g_stats.entries) {
+        if (item.first == "special-memory-usage")
+          continue; // Too expensive for get-all
+
         if(const auto& val = boost::get<DNSDistStats::stat_t*>(&item.second)) {
           doc.push_back(Json::object {
               { "type", "StatisticItem" },
@@ -697,6 +1007,7 @@ static void connectionThread(int sock, ComboAddress remote)
       typedef boost::variant<bool, double, std::string> configentry_t;
       std::vector<std::pair<std::string, configentry_t> > configEntries {
         { "acl", g_ACL.getLocal()->toString() },
+        { "allow-empty-response", g_allowEmptyResponse },
         { "control-socket", g_serverControl.toStringWithPort() },
         { "ecs-override", g_ECSOverride },
         { "ecs-source-prefix-v4", (double) g_ECSSourcePrefixV4 },

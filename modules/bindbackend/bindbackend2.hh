@@ -29,6 +29,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <fstream>
+#include <mutex>
 #include <boost/utility.hpp>
 
 #include <boost/tuple/tuple.hpp>
@@ -103,22 +104,18 @@ template <typename T>
 class LookButDontTouch //  : public boost::noncopyable
 {
 public:
-  LookButDontTouch() 
+  LookButDontTouch()
   {
-    pthread_mutex_init(&d_lock, 0);
-    pthread_mutex_init(&d_swaplock, 0);
   }
   LookButDontTouch(shared_ptr<T> records) : d_records(records)
   {
-    pthread_mutex_init(&d_lock, 0);
-    pthread_mutex_init(&d_swaplock, 0);
   }
 
   shared_ptr<const T> get()
   {
     shared_ptr<const T> ret;
     {
-      Lock l(&d_lock);
+      std::lock_guard<std::mutex> lock(s_lock);
       ret = d_records;
     }
     return ret;
@@ -128,22 +125,14 @@ public:
   {
     shared_ptr<T> ret;
     {
-      Lock l(&d_lock);
+      std::lock_guard<std::mutex> lock(s_lock);
       ret = d_records;
     }
     return ret;
   }
 
-
-  void swap(shared_ptr<T> records)
-  {
-    Lock l(&d_lock);
-    Lock l2(&d_swaplock);
-    d_records.swap(records);
-  }
-  pthread_mutex_t d_lock;
-  pthread_mutex_t d_swaplock;
 private:
+  static std::mutex s_lock;
   shared_ptr<T> d_records;
 };
 
@@ -165,9 +154,9 @@ public:
   vector<ComboAddress> d_masters;     //!< IP address of the master of this domain
   set<string> d_also_notify; //!< IP list of hosts to also notify
   LookButDontTouch<recordstorage_t> d_records;  //!< the actual records belonging to this domain
-  time_t d_ctime;  //!< last known ctime of the file on disk
-  time_t d_lastcheck; //!< last time domain was checked for freshness
-  uint32_t d_lastnotified; //!< Last serial number we notified our slaves of
+  time_t d_ctime{0};  //!< last known ctime of the file on disk
+  time_t d_lastcheck{0}; //!< last time domain was checked for freshness
+  uint32_t d_lastnotified{0}; //!< Last serial number we notified our slaves of
   unsigned int d_id;  //!< internal id of the domain
   mutable bool d_checknow; //!< if this domain has been flagged for a check
   bool d_loaded;  //!< if a domain is loaded
@@ -195,7 +184,7 @@ public:
   time_t getCtime(const string &fname);
    // DNSSEC
   bool getBeforeAndAfterNamesAbsolute(uint32_t id, const DNSName& qname, DNSName& unhashed, DNSName& before, DNSName& after) override;
-  void lookup(const QType &, const DNSName &qdomain, DNSPacket *p=0, int zoneId=-1) override;
+  void lookup(const QType &, const DNSName &qdomain, int zoneId, DNSPacket *p=nullptr) override;
   bool list(const DNSName &target, int id, bool include_disabled=false) override;
   bool get(DNSResourceRecord &) override;
   void getAllDomains(vector<DomainInfo> *domains, bool include_disabled=false) override;
@@ -206,7 +195,7 @@ public:
   void setFresh(uint32_t domain_id) override;
   void setNotified(uint32_t id, uint32_t serial) override;
   bool startTransaction(const DNSName &qname, int id) override;
-  bool feedRecord(const DNSResourceRecord &rr, const DNSName &ordername) override;
+  bool feedRecord(const DNSResourceRecord &rr, const DNSName &ordername, bool ordernameIsNSEC3=false) override;
   bool commitTransaction() override;
   bool abortTransaction() override;
   void alsoNotifies(const DNSName &domain, set<string> *ips) override;
@@ -249,7 +238,6 @@ private:
   void setupDNSSEC();
   void setupStatements();
   void freeStatements();
-  void release(SSqlStatement**);
   static bool safeGetBBDomainInfo(int id, BB2DomainInfo* bbd);
   static void safePutBBDomainInfo(const BB2DomainInfo& bbd);
   static bool safeGetBBDomainInfo(const DNSName& name, BB2DomainInfo* bbd);

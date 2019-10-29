@@ -159,7 +159,7 @@ static std::string getSecPollStatus(const std::string& queriedName, int timeout=
 
     if (ntohs(d.qdcount) != 1 || ntohs(d.ancount) != 1) {
       if (g_verbose) {
-        warnlog("Invalid answer (qdcount %d / ancount %d) received from the secpoll stub resolver %s", dest.toString());
+        warnlog("Invalid answer (qdcount %d / ancount %d) received from the secpoll stub resolver %s", ntohs(d.qdcount), ntohs(d.ancount), dest.toString());
       }
       continue;
     }
@@ -192,7 +192,7 @@ void doSecPoll(const std::string& suffix)
   }
 
   const std::string pkgv(PACKAGEVERSION);
-  bool releaseVersion = pkgv.find("0.0.") != 0;
+  bool releaseVersion = std::count(pkgv.begin(), pkgv.end(), '.') == 2;
   const std::string version = "dnsdist-" + pkgv;
   std::string queriedName = version.substr(0, 63) + ".security-status." + suffix;
 

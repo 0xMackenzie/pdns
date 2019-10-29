@@ -197,12 +197,13 @@ size_t writen2WithTimeout(int fd, const void * buffer, size_t len, int timeout)
 string nowTime()
 {
   time_t now = time(nullptr);
-  struct tm* tm = localtime(&now);
+  struct tm tm;
+  localtime_r(&now, &tm);
   char buffer[30];
   // YYYY-mm-dd HH:MM:SS TZOFF
-  strftime(buffer, sizeof(buffer), "%F %T %z", tm);
+  strftime(buffer, sizeof(buffer), "%F %T %z", &tm);
   buffer[sizeof(buffer)-1] = '\0';
-  return buffer;
+  return string(buffer);
 }
 
 uint16_t getShort(const unsigned char *p)
@@ -446,10 +447,6 @@ DTime::DTime()
   d_set.tv_sec=d_set.tv_usec=0;
 }
 
-DTime::DTime(const DTime &dt) : d_set(dt.d_set)
-{
-}
-
 time_t DTime::time()
 {
   return d_set.tv_sec;
@@ -498,7 +495,7 @@ string getHostname()
   if(gethostname(tmp, MAXHOSTNAMELEN))
     return "UNKNOWN";
 
-  return tmp;
+  return string(tmp);
 }
 
 string itoa(int i)
@@ -525,14 +522,14 @@ string bitFlip(const string &str)
   return ret;
 }
 
+string stringerror(int err)
+{
+  return strerror(err);
+}
+
 string stringerror()
 {
   return strerror(errno);
-}
-
-string netstringerror()
-{
-  return stringerror();
 }
 
 void cleanSlashes(string &str)
@@ -571,7 +568,7 @@ string U32ToIP(uint32_t val)
            (val >> 16)&0xff,
            (val >>  8)&0xff,
            (val      )&0xff);
-  return tmp;
+  return string(tmp);
 }
 
 
@@ -582,7 +579,7 @@ string makeHexDump(const string& str)
   ret.reserve((int)(str.size()*2.2));
 
   for(string::size_type n=0;n<str.size();++n) {
-    sprintf(tmp,"%02x ", (unsigned char)str[n]);
+    snprintf(tmp, sizeof(tmp), "%02x ", (unsigned char)str[n]);
     ret+=tmp;
   }
   return ret;
@@ -866,11 +863,12 @@ bool stringfgets(FILE* fp, std::string& line)
 bool readFileIfThere(const char* fname, std::string* line)
 {
   line->clear();
-  FILE* fp = fopen(fname, "r");
+  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fopen(fname, "r"), fclose);
   if(!fp)
     return false;
-  stringfgets(fp, *line);
-  fclose(fp);
+  stringfgets(fp.get(), *line);
+  fp.reset();
+
   return true;
 }
 
@@ -883,7 +881,8 @@ Regex::Regex(const string &expr)
 // if you end up here because valgrind told you were are doing something wrong
 // with msgh->msg_controllen, please refer to https://github.com/PowerDNS/pdns/pull/3962
 // first.
-void addCMsgSrcAddr(struct msghdr* msgh, void* cmsgbuf, const ComboAddress* source, int itfIndex)
+// Note that cmsgbuf should be aligned the same as a struct cmsghdr
+void addCMsgSrcAddr(struct msghdr* msgh, cmsgbuf_aligned* cmsgbuf, const ComboAddress* source, int itfIndex)
 {
   struct cmsghdr *cmsg = NULL;
 
@@ -891,6 +890,14 @@ void addCMsgSrcAddr(struct msghdr* msgh, void* cmsgbuf, const ComboAddress* sour
     struct in6_pktinfo *pkt;
 
     msgh->msg_control = cmsgbuf;
+#if !defined( __APPLE__ )
+    /* CMSG_SPACE is not a constexpr on macOS */
+    static_assert(CMSG_SPACE(sizeof(*pkt)) <= sizeof(*cmsgbuf), "Buffer is too small for in6_pktinfo");
+#else /* __APPLE__ */
+    if (CMSG_SPACE(sizeof(*pkt)) > sizeof(*cmsgbuf)) {
+      throw std::runtime_error("Buffer is too small for in6_pktinfo");
+    }
+#endif /* __APPLE__ */
     msgh->msg_controllen = CMSG_SPACE(sizeof(*pkt));
 
     cmsg = CMSG_FIRSTHDR(msgh);
@@ -899,7 +906,8 @@ void addCMsgSrcAddr(struct msghdr* msgh, void* cmsgbuf, const ComboAddress* sour
     cmsg->cmsg_len = CMSG_LEN(sizeof(*pkt));
 
     pkt = (struct in6_pktinfo *) CMSG_DATA(cmsg);
-    memset(pkt, 0, sizeof(*pkt));
+    // Include the padding to stop valgrind complaining about passing uninitialized data
+    memset(pkt, 0, CMSG_SPACE(sizeof(*pkt)));
     pkt->ipi6_addr = source->sin6.sin6_addr;
     pkt->ipi6_ifindex = itfIndex;
   }
@@ -908,6 +916,14 @@ void addCMsgSrcAddr(struct msghdr* msgh, void* cmsgbuf, const ComboAddress* sour
     struct in_pktinfo *pkt;
 
     msgh->msg_control = cmsgbuf;
+#if !defined( __APPLE__ )
+    /* CMSG_SPACE is not a constexpr on macOS */
+    static_assert(CMSG_SPACE(sizeof(*pkt)) <= sizeof(*cmsgbuf), "Buffer is too small for in_pktinfo");
+#else /* __APPLE__ */
+    if (CMSG_SPACE(sizeof(*pkt)) > sizeof(*cmsgbuf)) {
+      throw std::runtime_error("Buffer is too small for in_pktinfo");
+    }
+#endif /* __APPLE__ */
     msgh->msg_controllen = CMSG_SPACE(sizeof(*pkt));
 
     cmsg = CMSG_FIRSTHDR(msgh);
@@ -916,13 +932,21 @@ void addCMsgSrcAddr(struct msghdr* msgh, void* cmsgbuf, const ComboAddress* sour
     cmsg->cmsg_len = CMSG_LEN(sizeof(*pkt));
 
     pkt = (struct in_pktinfo *) CMSG_DATA(cmsg);
-    memset(pkt, 0, sizeof(*pkt));
+    // Include the padding to stop valgrind complaining about passing uninitialized data
+    memset(pkt, 0, CMSG_SPACE(sizeof(*pkt)));
     pkt->ipi_spec_dst = source->sin4.sin_addr;
     pkt->ipi_ifindex = itfIndex;
 #elif defined(IP_SENDSRCADDR)
     struct in_addr *in;
 
     msgh->msg_control = cmsgbuf;
+#if !defined( __APPLE__ )
+    static_assert(CMSG_SPACE(sizeof(*in)) <= sizeof(*cmsgbuf), "Buffer is too small for in_addr");
+#else /* __APPLE__ */
+    if (CMSG_SPACE(sizeof(*in)) > sizeof(*cmsgbuf)) {
+      throw std::runtime_error("Buffer is too small for in_addr");
+    }
+#endif /* __APPLE__ */
     msgh->msg_controllen = CMSG_SPACE(sizeof(*in));
 
     cmsg = CMSG_FIRSTHDR(msgh);
@@ -930,7 +954,9 @@ void addCMsgSrcAddr(struct msghdr* msgh, void* cmsgbuf, const ComboAddress* sour
     cmsg->cmsg_type = IP_SENDSRCADDR;
     cmsg->cmsg_len = CMSG_LEN(sizeof(*in));
 
+    // Include the padding to stop valgrind complaining about passing uninitialized data
     in = (struct in_addr *) CMSG_DATA(cmsg);
+    memset(in, 0, CMSG_SPACE(sizeof(*in)));
     *in = source->sin4.sin_addr;
 #endif
   }
@@ -990,16 +1016,26 @@ uint32_t burtle(const unsigned char* k, uint32_t length, uint32_t initval)
   c += length;
   switch(len) {             /* all the case statements fall through */
   case 11: c+=((uint32_t)k[10]<<24);
+    /* fall-through */
   case 10: c+=((uint32_t)k[9]<<16);
+    /* fall-through */
   case 9 : c+=((uint32_t)k[8]<<8);
     /* the first byte of c is reserved for the length */
+    /* fall-through */
   case 8 : b+=((uint32_t)k[7]<<24);
+    /* fall-through */
   case 7 : b+=((uint32_t)k[6]<<16);
+    /* fall-through */
   case 6 : b+=((uint32_t)k[5]<<8);
+    /* fall-through */
   case 5 : b+=k[4];
+    /* fall-through */
   case 4 : a+=((uint32_t)k[3]<<24);
+    /* fall-through */
   case 3 : a+=((uint32_t)k[2]<<16);
+    /* fall-through */
   case 2 : a+=((uint32_t)k[1]<<8);
+    /* fall-through */
   case 1 : a+=k[0];
     /* case 0: nothing left to add */
   }
@@ -1030,16 +1066,26 @@ uint32_t burtleCI(const unsigned char* k, uint32_t length, uint32_t initval)
   c += length;
   switch(len) {             /* all the case statements fall through */
   case 11: c+=((uint32_t)dns_tolower(k[10])<<24);
+    /* fall-through */
   case 10: c+=((uint32_t)dns_tolower(k[9])<<16);
+    /* fall-through */
   case 9 : c+=((uint32_t)dns_tolower(k[8])<<8);
     /* the first byte of c is reserved for the length */
+    /* fall-through */
   case 8 : b+=((uint32_t)dns_tolower(k[7])<<24);
+    /* fall-through */
   case 7 : b+=((uint32_t)dns_tolower(k[6])<<16);
+    /* fall-through */
   case 6 : b+=((uint32_t)dns_tolower(k[5])<<8);
+    /* fall-through */
   case 5 : b+=dns_tolower(k[4]);
+    /* fall-through */
   case 4 : a+=((uint32_t)dns_tolower(k[3])<<24);
+    /* fall-through */
   case 3 : a+=((uint32_t)dns_tolower(k[2])<<16);
+    /* fall-through */
   case 2 : a+=((uint32_t)dns_tolower(k[1])<<8);
+    /* fall-through */
   case 1 : a+=dns_tolower(k[0]);
     /* case 0: nothing left to add */
   }
@@ -1090,7 +1136,7 @@ bool setReuseAddr(int sock)
 {
   int tmp = 1;
   if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&tmp, static_cast<unsigned>(sizeof tmp))<0)
-    throw PDNSException(string("Setsockopt failed: ")+strerror(errno));
+    throw PDNSException(string("Setsockopt failed: ")+stringerror());
   return true;
 }
 
@@ -1098,6 +1144,22 @@ bool isNonBlocking(int sock)
 {
   int flags=fcntl(sock,F_GETFL,0);
   return flags & O_NONBLOCK;
+}
+
+bool setReceiveSocketErrors(int sock, int af)
+{
+#ifdef __linux__
+  int tmp = 1, ret;
+  if (af == AF_INET) {
+    ret = setsockopt(sock, IPPROTO_IP, IP_RECVERR, &tmp, sizeof(tmp));
+  } else {
+    ret = setsockopt(sock, IPPROTO_IPV6, IPV6_RECVERR, &tmp, sizeof(tmp));
+  }
+  if (ret < 0) {
+    throw PDNSException(string("Setsockopt failed: ") + stringerror());
+  }
+#endif
+  return true;
 }
 
 // Closes a socket.
@@ -1240,7 +1302,27 @@ uint64_t getOpenFileDescriptors(const std::string&)
 uint64_t getRealMemoryUsage(const std::string&)
 {
 #ifdef __linux__
-  ifstream ifs("/proc/"+std::to_string(getpid())+"/smaps");
+  ifstream ifs("/proc/self/statm");
+  if(!ifs)
+    return 0;
+
+  uint64_t size, resident, shared, text, lib, data;
+  ifs >> size >> resident >> shared >> text >> lib >> data;
+
+  return data * getpagesize();
+#else
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru) != 0)
+    return 0;
+  return ru.ru_maxrss * 1024;
+#endif
+}
+
+
+uint64_t getSpecialMemoryUsage(const std::string&)
+{
+#ifdef __linux__
+  ifstream ifs("/proc/self/smaps");
   if(!ifs)
     return 0;
   string line;
@@ -1447,4 +1529,37 @@ std::vector<ComboAddress> getResolvers(const std::string& resolvConfPath)
   }
 
   return results;
+}
+
+size_t getPipeBufferSize(int fd)
+{
+#ifdef F_GETPIPE_SZ
+  int res = fcntl(fd, F_GETPIPE_SZ);
+  if (res == -1) {
+    return 0;
+  }
+  return res;
+#else
+  errno = ENOSYS;
+  return 0;
+#endif /* F_GETPIPE_SZ */
+}
+
+bool setPipeBufferSize(int fd, size_t size)
+{
+#ifdef F_SETPIPE_SZ
+  if (size > std::numeric_limits<int>::max()) {
+    errno = EINVAL;
+    return false;
+  }
+  int newSize = static_cast<int>(size);
+  int res = fcntl(fd, F_SETPIPE_SZ, newSize);
+  if (res == -1) {
+    return false;
+  }
+  return true;
+#else
+  errno = ENOSYS;
+  return false;
+#endif /* F_SETPIPE_SZ */
 }

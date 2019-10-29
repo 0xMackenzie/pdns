@@ -121,7 +121,7 @@ int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& r
   vector<uint8_t> packet;
 
   DNSPacketWriter pw(packet, qname, qtype);
-  pw.getHeader()->id=dns_random(0xffff);
+  pw.getHeader()->id=dns_random_uint16();
   pw.getHeader()->rd=1;
 
   string msg ="Doing stub resolving, using resolvers: ";
@@ -168,4 +168,13 @@ int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSZoneRecord>& r
     return mdp.d_header.rcode;
   }
   return RCode::ServFail;
+}
+
+int stubDoResolve(const DNSName& qname, uint16_t qtype, vector<DNSRecord>& ret) {
+  vector<DNSZoneRecord> ret2;
+  int res = stubDoResolve(qname, qtype, ret2);
+  for (const auto &r : ret2) {
+    ret.push_back(r.dr);
+  }
+  return res;
 }

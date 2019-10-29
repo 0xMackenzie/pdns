@@ -92,13 +92,13 @@ BOOST_AUTO_TEST_CASE(test_getEDNSOptions) {
   BOOST_REQUIRE_EQUAL(res, 0);
 
   /* 3 EDNS options but two of them are EDNS Cookie, so we only have two entries in the map */
-  BOOST_CHECK_EQUAL(options.size(), 2);
+  BOOST_CHECK_EQUAL(options.size(), 2U);
 
   auto it = options.find(EDNSOptionCode::ECS);
   BOOST_REQUIRE(it != options.end());
-  BOOST_REQUIRE_EQUAL(it->second.values.size(), 1);
+  BOOST_REQUIRE_EQUAL(it->second.values.size(), 1U);
   BOOST_REQUIRE(it->second.values.at(0).content != nullptr);
-  BOOST_REQUIRE_GT(it->second.values.at(0).size, 0);
+  BOOST_REQUIRE_GT(it->second.values.at(0).size, 0U);
 
   EDNSSubnetOpts eso;
   BOOST_REQUIRE(getEDNSSubnetOptsFromString(it->second.values.at(0).content, it->second.values.at(0).size, &eso));
@@ -106,11 +106,11 @@ BOOST_AUTO_TEST_CASE(test_getEDNSOptions) {
 
   it = options.find(EDNSOptionCode::COOKIE);
   BOOST_REQUIRE(it != options.end());
-  BOOST_REQUIRE_EQUAL(it->second.values.size(), 2);
+  BOOST_REQUIRE_EQUAL(it->second.values.size(), 2U);
   BOOST_REQUIRE(it->second.values.at(0).content != nullptr);
-  BOOST_REQUIRE_GT(it->second.values.at(0).size, 0);
+  BOOST_REQUIRE_GT(it->second.values.at(0).size, 0U);
   BOOST_REQUIRE(it->second.values.at(1).content != nullptr);
-  BOOST_REQUIRE_GT(it->second.values.at(1).size, 0);
+  BOOST_REQUIRE_GT(it->second.values.at(1).size, 0U);
 }
 
 static void checkECSOptionValidity(const std::string& sourceStr, uint8_t sourceMask, uint8_t scopeMask)
@@ -126,7 +126,9 @@ static void checkECSOptionValidity(const std::string& sourceStr, uint8_t sourceM
   uint8_t sourceBytes = ((sourceMask - 1) >> 3) + 1;
   BOOST_REQUIRE_EQUAL(ecsOptionStr.size(), (ecsHeaderSize + sourceBytes));
   /* family */
-  BOOST_REQUIRE_EQUAL(ntohs(*(reinterpret_cast<const uint16_t*>(&ecsOptionStr.at(0)))), source.isIPv4() ? 1 : 2);
+  uint16_t u;
+  memcpy(&u, ecsOptionStr.c_str(), sizeof(u));
+  BOOST_REQUIRE_EQUAL(ntohs(u), source.isIPv4() ? 1 : 2);
   /* source mask */
   BOOST_REQUIRE_EQUAL(static_cast<uint8_t>(ecsOptionStr.at(2)), sourceMask);
   BOOST_REQUIRE_EQUAL(static_cast<uint8_t>(ecsOptionStr.at(3)), scopeMask);

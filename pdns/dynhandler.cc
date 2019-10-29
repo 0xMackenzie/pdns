@@ -83,23 +83,22 @@ string DLPingHandler(const vector<string>&parts, Utility::pid_t ppid)
   return "PONG";
 }
 
-string DLShowHandler(const vector<string>&parts, Utility::pid_t ppid)
-try
-{
-  extern StatBag S;
-  string ret("Wrong number of parameters");
-  if(parts.size()==2) {
-    if(parts[1]=="*")
-      ret=S.directory();
-    else
-      ret=S.getValueStr(parts[1]);
-  }
+string DLShowHandler(const vector<string>&parts, Utility::pid_t ppid) {
+  try {
+    extern StatBag S;
+    string ret("Wrong number of parameters");
+    if (parts.size() == 2) {
+      if (parts[1] == "*")
+        ret = S.directory();
+      else
+        ret = S.getValueStr(parts[1]);
+    }
 
-  return ret;
-}
-catch(...)
-{
-  return "Unknown";
+    return ret;
+  }
+  catch (...) {
+    return "Unknown";
+  }
 }
 
 void setStatus(const string &str)
@@ -302,7 +301,7 @@ string DLNotifyHandler(const vector<string>&parts, Utility::pid_t ppid)
     for (const auto& di : domains) {
       if (di.kind == DomainInfo::Master || di.kind == DomainInfo::Slave) { // MASTER and Slave if slave-renotify is enabled
         total++;
-        if(Communicator.notifyDomain(di.zone))
+        if(Communicator.notifyDomain(di.zone, &B))
           notified++;
       }
     }
@@ -317,7 +316,7 @@ string DLNotifyHandler(const vector<string>&parts, Utility::pid_t ppid)
     } catch (...) {
       return "Failed to parse domain as valid DNS name";
     }
-    if(!Communicator.notifyDomain(DNSName(parts[1])))
+    if(!Communicator.notifyDomain(DNSName(parts[1]), &B))
       return "Failed to add to the queue - see log";
     return "Added to queue";
   }

@@ -49,7 +49,7 @@ public:
   GeoIPBackend(const std::string& suffix="");
   ~GeoIPBackend();
 
-  void lookup(const QType &qtype, const DNSName &qdomain, DNSPacket *pkt_p=0, int zoneId=-1) override;
+  void lookup(const QType &qtype, const DNSName &qdomain, int zoneId, DNSPacket *pkt_p=nullptr) override;
   bool list(const DNSName &target, int domain_id, bool include_disabled=false) override { return false; } // not supported
   bool get(DNSResourceRecord &r) override;
   void reload() override;
@@ -70,10 +70,10 @@ private:
   static pthread_rwlock_t s_state_lock;
 
   void initialize();
-  string format2str(string format, const string& ip, bool v6, GeoIPNetmask& gl);
+  string format2str(string format, const Netmask &addr, GeoIPNetmask& gl);
   bool d_dnssec;
   bool hasDNSSECkey(const DNSName& name);
-  bool lookup_static(const GeoIPDomain &dom, const DNSName &search, const QType &qtype, const DNSName& qdomain, const std::string &ip, GeoIPNetmask& gl, bool v6);
+  bool lookup_static(const GeoIPDomain &dom, const DNSName &search, const QType &qtype, const DNSName& qdomain, const Netmask &addr, GeoIPNetmask& gl);
   vector<DNSResourceRecord> d_result;
   vector<GeoIPInterface> d_files;
 };

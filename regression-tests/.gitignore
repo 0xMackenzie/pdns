@@ -25,8 +25,8 @@
 /dsset-*
 /bind.conf
 /bind-slave.conf
-/goracle.log
-/goracle2.log
-/oracle.log
-/oracle2.log
 /remotebackend-access.log
+/pdns.lmdb*
+/pdns2.lmdb*
+/recursor.forward-zones-file
+/recursor.trustedkeys.lua

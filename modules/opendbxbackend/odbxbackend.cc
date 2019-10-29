@@ -289,7 +289,7 @@ bool OdbxBackend::list( const DNSName& target, int zoneid, bool include_disabled
 
 
 
-void OdbxBackend::lookup( const QType& qtype, const DNSName& qname, DNSPacket* dnspkt, int zoneid )
+void OdbxBackend::lookup( const QType& qtype, const DNSName& qname, int zoneid, DNSPacket* dnspkt )
 {
         try
         {
@@ -629,7 +629,7 @@ bool OdbxBackend::createSlaveDomain( const string& ip, const DNSName& domain, co
 
 
 
-bool OdbxBackend::feedRecord( const DNSResourceRecord& rr, const DNSName& ordername )
+bool OdbxBackend::feedRecord( const DNSResourceRecord& rr, const DNSName& ordername, bool ordernameIsNSEC3 )
 {
         try
         {

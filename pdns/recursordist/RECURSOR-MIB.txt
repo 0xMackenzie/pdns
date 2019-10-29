@@ -801,6 +801,30 @@ dnssecCheckDisabledQueries OBJECT-TYPE
         "Number of queries received with the CD bit set"
     ::= { stats 96 }
 
+variableResponses OBJECT-TYPE
+    SYNTAX Counter64
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Number of variable responses"
+    ::= { stats 97 }
+
+specialMemoryUsage OBJECT-TYPE
+    SYNTAX CounterBasedGauge64
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Memory usage (more precise but expensive to retrieve)"
+    ::= { stats 98 }
+
+rebalancedQueries OBJECT-TYPE
+    SYNTAX Counter64
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION
+        "Number of queries re-distributed because the first selected worker thread was above the target load"
+    ::= { stats 99 }
+
 ---
 --- Traps / Notifications
 ---
@@ -919,6 +943,7 @@ recGroup OBJECT-GROUP
         noednsOutqueries,
         uptime,
         realMemoryUsage,
+        specialMemoryUsage,
         fdUsage,
         userMsec,
         sysMsec,
@@ -938,7 +963,10 @@ recGroup OBJECT-GROUP
         truncatedDrops,
         emptyQueries,
         dnssecAuthenticDataQueries,
-        dnssecCheckDisabledQueries
+        dnssecCheckDisabledQueries,
+        variableResponses,
+        specialMemoryUsage,
+        rebalancedQueries,
         trapReason
     }
     STATUS current

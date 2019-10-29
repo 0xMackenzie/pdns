@@ -21,6 +21,14 @@ Generic MySQL backend
   point this is going to harm your database, for example when an incoming
   zone transfer fails.
 
+.. warning::
+  While it is possible to run the Generic MySQL backend on top of MySQL
+  views, we have received several reports of this causing performance
+  problems and memory leaks.  Please know that when reporting problems when
+  running PowerDNS on top of a modified schema, our open source support
+  offering requires you to reproduce your problem on an unmodified schema without
+  views.
+
 The default schema is included at the bottom of this page.
 :ref:`migration-zone2sql` with the ``--gmysql`` flag also
 assumes this layout is in place. For full migration notes, please see
@@ -33,6 +41,7 @@ material, and other information upon deletion of a domain from the
 domains table. The following SQL does the job:
 
 .. literalinclude:: ../../modules/gmysqlbackend/enable-foreign-keys.mysql.sql
+   :language: SQL
 
 Using MySQL replication
 -----------------------
@@ -115,6 +124,14 @@ Enable DNSSEC processing for this backend. Default: no.
 
 Use the InnoDB READ-COMMITTED transaction isolation level. Default: yes.
 
+.. _setting-gmysql-ssl:
+
+``gmysql-ssl``
+^^^^^^^^^^^^^^^^^^
+.. versionadded:: 4.2.1
+
+Send the CLIENT_SSL capabily flag to the server. SSL suppport is announced by the server via CLIENT_SSL and is enabled if the client returns the same capability. Default: no.
+
 .. _setting-gmysql-timeout:
 
 ``gmysql-timeout``
@@ -122,6 +139,16 @@ Use the InnoDB READ-COMMITTED transaction isolation level. Default: yes.
 
 The timeout in seconds for each attempt to read from, or write to the
 server. A value of 0 will disable the timeout. Default: 10
+
+.. _setting-gmysql-thread-cleanup:
+
+``gmysql-thread-cleanup``
+^^^^^^^^^^^^^^^^^^^^^^^^^
+.. versionadded:: 4.1.8
+
+Older versions (such as those shipped on RHEL 7) of the MySQL/MariaDB client libraries leak memory unless applications explicitly report the end of each thread to the library. Enabling ``gmysql-thread-cleanup`` tells PowerDNS to call ``mysql_thread_end()`` whenever a thread ends.
+
+Only enable this if you are certain you need to. For more discussion, see https://github.com/PowerDNS/pdns/issues/6231.
 
 Default Schema
 --------------

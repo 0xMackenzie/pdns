@@ -54,11 +54,15 @@ string StatBag::directory()
   ostringstream o;
 
   for(const auto& i: d_stats) {
+    if (d_blacklist.find(i.first) != d_blacklist.end())
+      continue;
     o<<i.first<<"="<<*(i.second)<<",";
   }
 
 
   for(const funcstats_t::value_type& val :  d_funcstats) {
+    if (d_blacklist.find(val.first) != d_blacklist.end())
+      continue;
     o << val.first<<"="<<val.second(val.first)<<",";
   }
   dir=o.str();
@@ -71,10 +75,14 @@ vector<string>StatBag::getEntries()
   vector<string> ret;
 
   for(const auto& i: d_stats) {
-      ret.push_back(i.first);
+    if (d_blacklist.find(i.first) != d_blacklist.end())
+      continue;
+    ret.push_back(i.first);
   }
 
   for(const funcstats_t::value_type& val :  d_funcstats) {
+    if (d_blacklist.find(val.first) != d_blacklist.end())
+      continue;
     ret.push_back(val.first);
   }
 
@@ -91,8 +99,8 @@ string StatBag::getDescrip(const string &item)
 
 void StatBag::declare(const string &key, const string &descrip)
 {
-  AtomicCounter *i=new AtomicCounter(0);
-  d_stats[key]=i;
+  auto i=make_unique<AtomicCounter>(0);
+  d_stats[key]=std::move(i);
   d_keyDescrips[key]=descrip;
 }
 
@@ -145,42 +153,47 @@ string StatBag::getValueStrZero(const string &key)
 AtomicCounter *StatBag::getPointer(const string &key)
 {
   exists(key);
-  return d_stats[key];
+  return d_stats[key].get();
 }
 
 StatBag::~StatBag()
 {
-  for(const auto& i: d_stats) {
-    delete i.second;
-  }
-  
 }
 
 template<typename T, typename Comp>
 StatRing<T,Comp>::StatRing(unsigned int size)
 {
   d_items.set_capacity(size);
-  pthread_mutex_init(&d_lock, 0);
+}
+
+template<typename T, typename Comp>
+StatRing<T,Comp>::StatRing(const StatRing<T,Comp> &arg)
+{
+  std::lock_guard<std::mutex> thislock(d_lock);
+  std::lock_guard<std::mutex> arglock(arg.d_lock);
+  
+  d_items = arg.d_items;
+  d_help = arg.d_help;
 }
 
 template<typename T, typename Comp>
 void StatRing<T,Comp>::account(const T& t)
 {
-  Lock l(&d_lock);
+  std::lock_guard<std::mutex> l(d_lock);
   d_items.push_back(t);
 }
 
 template<typename T, typename Comp>
 unsigned int StatRing<T,Comp>::getSize()
 {
-  Lock l(&d_lock);
+  std::lock_guard<std::mutex> l(d_lock);
   return d_items.capacity();
 }
 
 template<typename T, typename Comp>
 void StatRing<T,Comp>::resize(unsigned int newsize)
 {
-  Lock l(&d_lock);
+  std::lock_guard<std::mutex> l(d_lock);
   d_items.set_capacity(newsize);
 }
 
@@ -201,7 +214,7 @@ string StatRing<T,Comp>::getHelp()
 template<typename T, typename Comp>
 vector<pair<T, unsigned int> >StatRing<T,Comp>::get() const
 {
-  Lock l(&d_lock);
+  std::lock_guard<std::mutex> l(d_lock);
   map<T,unsigned int, Comp> res;
   for(typename boost::circular_buffer<T>::const_iterator i=d_items.begin();i!=d_items.end();++i) {
     res[*i]++;
@@ -218,37 +231,49 @@ vector<pair<T, unsigned int> >StatRing<T,Comp>::get() const
 
 void StatBag::declareRing(const string &name, const string &help, unsigned int size)
 {
-  d_rings[name]=StatRing<string>(size);
+  d_rings.emplace(name, size);
   d_rings[name].setHelp(help);
 }
 
 void StatBag::declareComboRing(const string &name, const string &help, unsigned int size)
 {
-  d_comborings[name]=StatRing<SComboAddress>(size);
+  d_comborings.emplace(name, size);
   d_comborings[name].setHelp(help);
+}
+
+void StatBag::declareDNSNameQTypeRing(const string &name, const string &help, unsigned int size)
+{
+  d_dnsnameqtyperings.emplace(name, size);
+  d_dnsnameqtyperings[name].setHelp(help);
 }
 
 
 vector<pair<string, unsigned int> > StatBag::getRing(const string &name)
 {
-  if(d_rings.count(name))
+  if(d_rings.count(name)) {
     return d_rings[name].get();
-  else {
+  }
+  vector<pair<string, unsigned int> > ret;
+
+  if (d_comborings.count(name)) {
     typedef pair<SComboAddress, unsigned int> stor_t;
     vector<stor_t> raw =d_comborings[name].get();
-    vector<pair<string, unsigned int> > ret;
     for(const stor_t& stor :  raw) {
       ret.push_back(make_pair(stor.first.ca.toString(), stor.second));
     }
-    return ret;
+  } else if(d_dnsnameqtyperings.count(name)) {
+    auto raw = d_dnsnameqtyperings[name].get();
+    for (auto const &e : raw) {
+      ret.push_back(make_pair(std::get<0>(e.first).toLogString() + "/" + std::get<1>(e.first).getName(), e.second));
+    }
   }
-    
+  return ret;
 }
 
 template<typename T, typename Comp>
 void StatRing<T,Comp>::reset()
 {
-  Lock l(&d_lock);
+  std::lock_guard<std::mutex> l(d_lock);
   d_items.clear();
 }
 
@@ -256,16 +281,20 @@ void StatBag::resetRing(const string &name)
 {
   if(d_rings.count(name))
     d_rings[name].reset();
-  else
+  if(d_comborings.count(name))
     d_comborings[name].reset();
+  if(d_dnsnameqtyperings.count(name))
+    d_dnsnameqtyperings[name].reset();
 }
 
 void StatBag::resizeRing(const string &name, unsigned int newsize)
 {
   if(d_rings.count(name))
     d_rings[name].resize(newsize);
-  else
+  if(d_comborings.count(name))
     d_comborings[name].resize(newsize);
+  if(d_dnsnameqtyperings.count(name))
+    return d_dnsnameqtyperings[name].resize(newsize);
 }
 
 
@@ -273,33 +302,46 @@ unsigned int StatBag::getRingSize(const string &name)
 {
   if(d_rings.count(name))
     return d_rings[name].getSize();
-  else
+  if(d_comborings.count(name))
     return d_comborings[name].getSize();
+  if(d_dnsnameqtyperings.count(name))
+    return d_dnsnameqtyperings[name].getSize();
+  return 0;
 }
 
 string StatBag::getRingTitle(const string &name)
 {
   if(d_rings.count(name))
     return d_rings[name].getHelp();
-  else 
+  if(d_comborings.count(name))
     return d_comborings[name].getHelp();
+  if(d_dnsnameqtyperings.count(name))
+    return d_dnsnameqtyperings[name].getHelp();
+  return "";
 }
 
 vector<string>StatBag::listRings()
 {
   vector<string> ret;
-  for(map<string,StatRing<string> >::const_iterator i=d_rings.begin();i!=d_rings.end();++i)
+  for(auto i=d_rings.begin();i!=d_rings.end();++i)
     ret.push_back(i->first);
-  for(map<string,StatRing<SComboAddress> >::const_iterator i=d_comborings.begin();i!=d_comborings.end();++i)
+  for(auto i=d_comborings.begin();i!=d_comborings.end();++i)
     ret.push_back(i->first);
+  for(const auto &i : d_dnsnameqtyperings)
+    ret.push_back(i.first);
 
   return ret;
 }
 
 bool StatBag::ringExists(const string &name)
 {
-  return d_rings.count(name) || d_comborings.count(name);
+  return d_rings.count(name) || d_comborings.count(name) || d_dnsnameqtyperings.count(name);
 }
 
-template class StatRing<std::string>;
+void StatBag::blacklist(const string& str) {
+  d_blacklist.insert(str);
+}
+
+template class StatRing<std::string, CIStringCompare>;
 template class StatRing<SComboAddress>;
+template class StatRing<std::tuple<DNSName, QType> >;

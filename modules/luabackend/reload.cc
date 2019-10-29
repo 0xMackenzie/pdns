@@ -34,25 +34,20 @@ using namespace std;
 
 #include "lua_functions.hh"
 
-/* 
-    virtual void reload();
-    virtual void rediscover(string* status=0);
-*/
-
-void LUABackend::get_lua_function(lua_State *lua, const char *name, int *function) {
+void LUABackend::get_lua_function(lua_State *lua_state, const char *name, int *function) {
     *function = 0;
     
     string f = "f_";
     f.append(name);
     
     string arg = "";
-    if (!::arg().isEmpty(f))
+    if (!::arg().isEmpty(string(LUABACKEND_PREFIX)+"-"+f))
         arg = getArg(f);
 
-    lua_getglobal(lua, arg == "" ? name : arg.c_str());
-    if (!lua_isnil(lua, -1)) {
-	lua_pushvalue(lua, -1);     
-        *function = luaL_ref(lua, LUA_REGISTRYINDEX);
+    lua_getglobal(lua_state, arg == "" ? name : arg.c_str());
+    if (!lua_isnil(lua_state, -1)) {
+	lua_pushvalue(lua_state, -1);     
+        *function = luaL_ref(lua_state, LUA_REGISTRYINDEX);
     }
 }
 
@@ -61,13 +56,12 @@ void LUABackend::reload() {
     
     backend_name.clear();
 
-//	backend_name = "[LUABackend: " + uitoa(backend_pid) + " (" + uitoa(backend_count) +")] ";
-    backend_name = "[LUABackend: (" + uitoa(backend_count) +")] ";
+    backend_name = "[LUABackend: " + uitoa((uintptr_t)backend_pid) + " (" + uitoa(backend_count) +")] ";
     
     if (lua)
 	lua_close(lua);
 	
-    logging = ::arg().mustDo("query-logging") || mustDo("logging-query");
+    logging = ::arg().mustDo("query-logging") || mustDo("query-logging");
 
 #if LUA_VERSION_NUM >= 502
     lua = luaL_newstate();

@@ -47,65 +47,64 @@ typedef int ProtocolType; //!< Supported protocol types
 //! Representation of a Socket and many of the Berkeley functions available
 class Socket : public boost::noncopyable
 {
-  Socket(int fd)
+  Socket(int fd): d_socket(fd)
   {
-    d_socket = fd;
-    d_buflen=4096;
-    d_buffer=new char[d_buflen];
   }
 
 public:
   //! Construct a socket of specified address family and socket type.
   Socket(int af, int st, ProtocolType pt=0)
   {
-    if((d_socket=socket(af,st, pt))<0)
-      throw NetworkError(strerror(errno));
+    if((d_socket=socket(af, st, pt))<0)
+      throw NetworkError(stringerror());
     setCloseOnExec(d_socket);
+  }
 
-    d_buflen=4096;
-    d_buffer=new char[d_buflen];
+  Socket(Socket&& rhs): d_buffer(std::move(rhs.d_buffer)), d_socket(rhs.d_socket)
+  {
+    rhs.d_socket = -1;
   }
 
   ~Socket()
   {
     try {
-      closesocket(d_socket);
+      if (d_socket != -1) {
+        closesocket(d_socket);
+      }
     }
     catch(const PDNSException& e) {
     }
-
-    delete[] d_buffer;
   }
 
   //! If the socket is capable of doing so, this function will wait for a connection
-  Socket *accept()
+  std::unique_ptr<Socket> accept()
   {
     struct sockaddr_in remote;
     socklen_t remlen=sizeof(remote);
     memset(&remote, 0, sizeof(remote));
-    int s=::accept(d_socket,(sockaddr *)&remote, &remlen);
+    int s=::accept(d_socket, reinterpret_cast<sockaddr *>(&remote), &remlen);
     if(s<0) {
       if(errno==EAGAIN)
         return nullptr;
 
-      throw NetworkError("Accepting a connection: "+string(strerror(errno)));
+      throw NetworkError("Accepting a connection: "+stringerror());
     }
 
-    return new Socket(s);
+    return std::unique_ptr<Socket>(new Socket(s));
   }
 
   //! Get remote address
   bool getRemote(ComboAddress &remote) {
     socklen_t remotelen=sizeof(remote);
-    return (getpeername(d_socket, (struct sockaddr *)&remote, &remotelen) >= 0);
+    return (getpeername(d_socket, reinterpret_cast<struct sockaddr *>(&remote), &remotelen) >= 0);
   }
 
   //! Check remote address against netmaskgroup ng
-  bool acl(NetmaskGroup &ng)
+  bool acl(const NetmaskGroup &ng)
   {
     ComboAddress remote;
     if (getRemote(remote))
-      return ng.match((ComboAddress *) &remote);
+      return ng.match(remote);
 
     return false;
   }
@@ -115,6 +114,7 @@ public:
   {
     ::setNonBlocking(d_socket);
   }
+
   //! Set the socket to blocking
   void setBlocking()
   {
@@ -125,35 +125,22 @@ public:
   {
     try {
       ::setReuseAddr(d_socket);
-    } catch (PDNSException &e) {
+    } catch (const PDNSException &e) {
       throw NetworkError(e.reason);
     }
   }
 
   //! Bind the socket to a specified endpoint
-  void bind(const ComboAddress &local)
+  void bind(const ComboAddress &local, bool reuseaddr=true)
   {
     int tmp=1;
-    if(setsockopt(d_socket, SOL_SOCKET, SO_REUSEADDR,(char*)&tmp,sizeof tmp)<0)
-      throw NetworkError(string("Setsockopt failed: ")+strerror(errno));
+    if(reuseaddr && setsockopt(d_socket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char*>(&tmp), sizeof tmp)<0)
+      throw NetworkError("Setsockopt failed: "+stringerror());
 
-    if(::bind(d_socket,(struct sockaddr *)&local, local.getSocklen())<0)
-      throw NetworkError("While binding: "+string(strerror(errno)));
+    if(::bind(d_socket, reinterpret_cast<const struct sockaddr *>(&local), local.getSocklen())<0)
+      throw NetworkError("While binding: "+stringerror());
   }
 
-#if 0
-  //! Bind the socket to a specified endpoint
-  void bind(const ComboAddress &ep)
-  {
-    ComboAddress local;
-    memset(reinterpret_cast<char *>(&local),0,sizeof(local));
-    local.sin_family=d_family;
-    local.sin_addr.s_addr=ep.address.byte;
-    local.sin_port=htons(ep.port);
-    
-    bind(local);
-  }
-#endif
   //! Connect the socket to a specified endpoint
   void connect(const ComboAddress &ep, int timeout=0)
   {
@@ -167,28 +154,30 @@ public:
       \param ep Will be filled with the origin of the datagram */
   void recvFrom(string &dgram, ComboAddress &ep)
   {
-    socklen_t remlen=sizeof(ep);
+    socklen_t remlen = sizeof(ep);
     ssize_t bytes;
-    if((bytes=recvfrom(d_socket, d_buffer, d_buflen, 0, (sockaddr *)&ep , &remlen)) <0)
-      throw NetworkError("After recvfrom: "+string(strerror(errno)));
+    d_buffer.resize(s_buflen);
+    if((bytes=recvfrom(d_socket, &d_buffer[0], s_buflen, 0, reinterpret_cast<sockaddr *>(&ep) , &remlen)) <0)
+      throw NetworkError("After recvfrom: "+stringerror());
     
-    dgram.assign(d_buffer,bytes);
+    dgram.assign(d_buffer, 0, static_cast<size_t>(bytes));
   }
 
   bool recvFromAsync(string &dgram, ComboAddress &ep)
   {
     struct sockaddr_in remote;
-    socklen_t remlen=sizeof(remote);
+    socklen_t remlen = sizeof(remote);
     ssize_t bytes;
-    if((bytes=recvfrom(d_socket, d_buffer, d_buflen, 0, (sockaddr *)&remote, &remlen))<0) {
+    d_buffer.resize(s_buflen);
+    if((bytes=recvfrom(d_socket, &d_buffer[0], s_buflen, 0, reinterpret_cast<sockaddr *>(&remote), &remlen))<0) {
       if(errno!=EAGAIN) {
-        throw NetworkError("After async recvfrom: "+string(strerror(errno)));
+        throw NetworkError("After async recvfrom: "+stringerror());
       }
       else {
         return false;
       }
     }
-    dgram.assign(d_buffer,bytes);
+    dgram.assign(d_buffer, 0, static_cast<size_t>(bytes));
     return true;
   }
 
@@ -196,15 +185,15 @@ public:
   //! For datagram sockets, send a datagram to a destination
   void sendTo(const char* msg, size_t len, const ComboAddress &ep)
   {
-    if(sendto(d_socket, msg, len, 0, (sockaddr *)&ep, ep.getSocklen())<0)
-      throw NetworkError("After sendto: "+string(strerror(errno)));
+    if(sendto(d_socket, msg, len, 0, reinterpret_cast<const sockaddr *>(&ep), ep.getSocklen())<0)
+      throw NetworkError("After sendto: "+stringerror());
   }
 
   //! For connected datagram sockets, send a datagram
   void send(const std::string& msg)
   {
     if(::send(d_socket, msg.c_str(), msg.size(), 0)<0)
-      throw NetworkError("After send: "+string(strerror(errno)));
+      throw NetworkError("After send: "+stringerror());
   }
 
   
@@ -230,12 +219,12 @@ public:
     do {
       res=::send(d_socket, ptr, toWrite, 0);
       if(res<0) 
-        throw NetworkError("Writing to a socket: "+string(strerror(errno)));
+        throw NetworkError("Writing to a socket: "+stringerror());
       if(!res)
         throw NetworkError("EOF on socket");
-      toWrite-=(size_t)res;
-      ptr+=(size_t)res;
-    }while(toWrite);
+      toWrite -= static_cast<size_t>(res);
+      ptr += static_cast<size_t>(res);
+    } while(toWrite);
 
   }
 
@@ -257,7 +246,7 @@ public:
     if(errno==EAGAIN)
       return 0;
     
-    throw NetworkError("Writing to a socket: "+string(strerror(errno)));
+    throw NetworkError("Writing to a socket: "+stringerror());
   }
 
   //! Writes toWrite bytes from ptr to the socket
@@ -267,7 +256,7 @@ public:
     ssize_t res;
     res=::send(d_socket,ptr,toWrite,0);
     if(res<0) {
-      throw NetworkError("Writing to a socket: "+string(strerror(errno)));
+      throw NetworkError("Writing to a socket: "+stringerror());
     }
     return res;
   }
@@ -275,7 +264,7 @@ public:
   void writenWithTimeout(const void *buffer, size_t n, int timeout)
   {
     size_t bytes=n;
-    const char *ptr = (char*)buffer;
+    const char *ptr = reinterpret_cast<const char*>(buffer);
     ssize_t ret;
     while(bytes) {
       ret=::write(d_socket, ptr, bytes);
@@ -295,8 +284,8 @@ public:
         throw NetworkError("Did not fulfill TCP write due to EOF");
       }
 
-      ptr += (size_t) ret;
-      bytes -= (size_t) ret;
+      ptr += static_cast<size_t>(ret);
+      bytes -= static_cast<size_t>(ret);
     }
   }
 
@@ -325,19 +314,20 @@ public:
   //! Reads a block of data from the socket to a string
   void read(string &data)
   {
-    ssize_t res=::recv(d_socket,d_buffer,d_buflen,0);
+    d_buffer.resize(s_buflen);
+    ssize_t res=::recv(d_socket, &d_buffer[0], s_buflen, 0);
     if(res<0) 
-      throw NetworkError("Reading from a socket: "+string(strerror(errno)));
-    data.assign(d_buffer,res);
+      throw NetworkError("Reading from a socket: "+stringerror());
+    data.assign(d_buffer, 0, static_cast<size_t>(res));
   }
 
   //! Reads a block of data from the socket to a block of memory
   size_t read(char *buffer, size_t bytes)
   {
-    ssize_t res=::recv(d_socket,buffer,bytes,0);
+    ssize_t res=::recv(d_socket, buffer, bytes, 0);
     if(res<0) 
-      throw NetworkError("Reading from a socket: "+string(strerror(errno)));
-    return (size_t) res;
+      throw NetworkError("Reading from a socket: "+stringerror());
+    return static_cast<size_t>(res);
   }
 
   ssize_t readWithTimeout(char* buffer, size_t n, int timeout)
@@ -347,7 +337,7 @@ public:
     if(err == 0)
       throw NetworkError("timeout reading");
     if(err < 0)
-      throw NetworkError("nonblocking read failed: "+string(strerror(errno)));
+      throw NetworkError("nonblocking read failed: "+stringerror());
 
     return read(buffer, n);
   }
@@ -356,7 +346,7 @@ public:
   void listen(unsigned int length=10)
   {
     if(::listen(d_socket,length)<0)
-      throw NetworkError("Setting socket to listen: "+string(strerror(errno)));
+      throw NetworkError("Setting socket to listen: "+stringerror());
   }
 
   //! Returns the internal file descriptor of the socket
@@ -366,9 +356,9 @@ public:
   }
   
 private:
-  char *d_buffer;
+  static const size_t s_buflen{4096};
+  std::string d_buffer;
   int d_socket;
-  size_t d_buflen;
 };
 
 

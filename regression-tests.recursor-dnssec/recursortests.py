@@ -13,7 +13,9 @@ import unittest
 import dns
 import dns.message
 
-class RecursorTest(unittest.TestCase):
+from eqdnsmessage import AssertEqualDNSMessageMixin
+
+class RecursorTest(AssertEqualDNSMessageMixin, unittest.TestCase):
     """
     Setup all recursors and auths required for the tests
     """
@@ -68,14 +70,14 @@ example.                 3600 IN NS   ns2.example.
 example.                 3600 IN DS   53174 13 1 50c9e913818767c236c06c2d8272723cb78cbf26
 
 ns1.example.             3600 IN A    {prefix}.10
-ns2.example.             3600 IN A    {prefix}.11
+ns2.example.             3600 IN A    {prefix}.18
         """,
         'example': """
 example.                 3600 IN SOA  {soa}
 example.                 3600 IN NS   ns1.example.
 example.                 3600 IN NS   ns2.example.
 ns1.example.             3600 IN A    {prefix}.10
-ns2.example.             3600 IN A    {prefix}.11
+ns2.example.             3600 IN A    {prefix}.18
 
 secure.example.          3600 IN NS   ns.secure.example.
 secure.example.          3600 IN DS   64723 13 1 53eb985040d3a89bacf29dbddb55a65834706f33
@@ -84,6 +86,10 @@ ns.secure.example.       3600 IN A    {prefix}.9
 cname-secure.example.    3600 IN NS   ns.cname-secure.example.
 cname-secure.example.    3600 IN DS   49148 13 1 a10314452d5ec4d97fcc6d7e275d217261fe790f
 ns.cname-secure.example. 3600 IN A    {prefix}.15
+
+dname-secure.example. 3600 IN NS ns.dname-secure.example.
+dname-secure.example. 3600 IN DS 42043 13 2 11c67f46b7c4d5968bc5f6cc944d58377b762bda53ddb4f3a6dbe6faf7a9940f
+ns.dname-secure.example. 3600 IN A {prefix}.13
 
 bogus.example.           3600 IN NS   ns.bogus.example.
 bogus.example.           3600 IN DS   65034 13 1 6df3bb50ea538e90eacdd7ae5419730783abb0ee
@@ -110,6 +116,14 @@ sort.example.                      3600 IN A     17.38.42.80
 sort.example.                      3600 IN A     192.168.0.1
 sort.example.                      3600 IN A     17.238.240.5
 sort.example.                      3600 IN MX    25 mx
+
+delay1.example.                     3600 IN NS   ns1.delay1.example.
+ns1.delay1.example.                 3600 IN A    {prefix}.16
+delay1.example.                     3600 IN DS 42043 13 2 7319fa605cf117f36e3de070157577ebb9a05a1d1f963d80eda55b5d6e793eb2
+
+delay2.example.                     3600 IN NS   ns1.delay2.example.
+ns1.delay2.example.                 3600 IN A    {prefix}.17
+delay2.example.                     3600 IN DS 42043 13 2 60a047b87740c8564c21d5fd34626c10a77a6c41e3b34564230119c2f13937b8
         """,
         'secure.example': """
 secure.example.          3600 IN SOA  {soa}
@@ -137,7 +151,22 @@ insecure.sub2.secure.example. 3600 IN NS ns1.insecure.example.
 *.cnamewildcardnxdomain.secure.example. 3600 IN CNAME doesntexist.secure.example.
 
 cname-to-formerr.secure.example. 3600 IN CNAME host1.insecure-formerr.example.
+
+dname-secure.secure.example. 3600 IN DNAME dname-secure.example.
+dname-insecure.secure.example. 3600 IN DNAME insecure.example.
+dname-bogus.secure.example. 3600 IN DNAME bogus.example.
         """,
+        'dname-secure.example': """
+dname-secure.example. 3600 IN SOA {soa}
+dname-secure.example. 3600 IN NS ns.dname-secure.example.
+ns.dname-secure.example. 3600 IN A {prefix}.13
+
+host1.dname-secure.example. IN A 192.0.2.21
+
+cname-to-secure.dname-secure.example. 3600 IN CNAME host1.secure.example.
+cname-to-insecure.dname-secure.example. 3600 IN CNAME node1.insecure.example.
+cname-to-bogus.dname-secure.example.    3600 IN CNAME ted.bogus.example.
+""",
         'cname-secure.example': """
 cname-secure.example.          3600 IN SOA   {soa}
 cname-secure.example.          3600 IN NS    ns.cname-secure.example.
@@ -165,6 +194,8 @@ ns1.insecure.example.    3600 IN A    {prefix}.13
 node1.insecure.example.  3600 IN A    192.0.2.6
 
 cname-to-secure.insecure.example. 3600 IN CNAME host1.secure.example.
+
+dname-to-secure.insecure.example. 3600 IN DNAME dname-secure.example.
         """,
         'optout.example': """
 optout.example.        3600 IN SOA  {soa}
@@ -211,6 +242,20 @@ undelegated.insecure.example.        3600 IN NS   ns1.undelegated.insecure.examp
 
 node1.undelegated.insecure.example.  3600 IN A    192.0.2.22
         """,
+
+        'delay1.example': """
+delay1.example.                       3600 IN SOA  {soa}
+delay1.example.                       3600 IN NS n1.delay1.example.
+ns1.delay1.example.                   3600 IN A    {prefix}.16
+*.delay1.example.                     0    LUA TXT ";" "local socket=require('socket')" "socket.sleep(tonumber(qname:getRawLabels()[1])/10)" "return 'a'"
+        """,
+        
+        'delay2.example': """
+delay2.example.                       3600 IN SOA  {soa}
+delay2.example.                       3600 IN NS n1.delay2.example.
+ns1.delay2.example.                   3600 IN A    {prefix}.17
+*.delay2.example.                     0    LUA TXT ";" "local socket=require('socket')" "socket.sleep(tonumber(qname:getRawLabels()[1])/10)" "return 'a'"
+        """
     }
 
     # The private keys for the zones (note that DS records should go into
@@ -262,6 +307,24 @@ PrivateKey: o9F5iix8V68tnMcuOaM2Lt8XXhIIY//SgHIHEePk6cM=
 Private-key-format: v1.2
 Algorithm: 13 (ECDSAP256SHA256)
 PrivateKey: kvoV/g4IO/tefSro+FLJ5UC7H3BUf0IUtZQSUOfQGyA=
+""",
+
+        'dname-secure.example': """
+Private-key-format: v1.2
+Algorithm: 13 (ECDSAP256SHA256)
+PrivateKey: Ep9uo6+wwjb4MaOmqq7LHav2FLrjotVOeZg8JT1Qk04=
+""",
+
+        'delay1.example': """
+Private-key-format: v1.2
+Algorithm: 13 (ECDSAP256SHA256)
+PrivateKey: Ep9uo6+wwjb4MaOmqq7LHav2FLrjotVOeZg8JT1Qk04=
+""",
+
+        'delay2.example': """
+Private-key-format: v1.2
+Algorithm: 13 (ECDSAP256SHA256)
+PrivateKey: Ep9uo6+wwjb4MaOmqq7LHav2FLrjotVOeZg8JT1Qk04=
 """
     }
 
@@ -269,14 +332,29 @@ PrivateKey: kvoV/g4IO/tefSro+FLJ5UC7H3BUf0IUtZQSUOfQGyA=
     # is a list of zones hosted on that IP. Note that delegations should
     # go into the _zones's zonecontent
     _auth_zones = {
-        '8': ['ROOT'],
-        '9': ['secure.example', 'islandofsecurity.example'],
-        '10': ['example'],
-        '11': ['example'],
-        '12': ['bogus.example', 'undelegated.secure.example', 'undelegated.insecure.example'],
-        '13': ['insecure.example', 'insecure.sub2.secure.example'],
-        '14': ['optout.example'],
-        '15': ['insecure.optout.example', 'secure.optout.example', 'cname-secure.example']
+        '8': {'threads': 1,
+              'zones': ['ROOT']},
+        '9': {'threads': 1,
+              'zones': ['secure.example', 'islandofsecurity.example']},
+        '10': {'threads': 1,
+               'zones': ['example']},
+
+        # 11 is used by CircleCI provided resolver
+
+        '12': {'threads': 1,
+               'zones': ['bogus.example', 'undelegated.secure.example', 'undelegated.insecure.example']},
+        '13': {'threads': 1,
+               'zones': ['insecure.example', 'insecure.sub2.secure.example', 'dname-secure.example']},
+        '14': {'threads': 1,
+               'zones': ['optout.example']},
+        '15': {'threads': 1,
+               'zones': ['insecure.optout.example', 'secure.optout.example', 'cname-secure.example']},
+        '16': {'threads': 2,
+               'zones': ['delay1.example']},
+        '17': {'threads': 2,
+               'zones': ['delay2.example']},
+        '18': {'threads': 1,
+               'zones': ['example']}
     }
 
     _auth_cmd = ['authbind',
@@ -315,7 +393,7 @@ options {
         };""" % (zone, zonename))
 
     @classmethod
-    def generateAuthConfig(cls, confdir):
+    def generateAuthConfig(cls, confdir, threads):
         bind_dnssec_db = os.path.join(confdir, 'bind-dnssec.sqlite3')
 
         with open(os.path.join(confdir, 'pdns.conf'), 'w') as pdnsconf:
@@ -333,8 +411,11 @@ query-cache-ttl=0
 log-dns-queries=yes
 log-dns-details=yes
 loglevel=9
-distributor-threads=1""".format(confdir=confdir,
-                                bind_dnssec_db=bind_dnssec_db))
+enable-lua-records
+dname-processing=yes
+distributor-threads={threads}""".format(confdir=confdir,
+                                        bind_dnssec_db=bind_dnssec_db,
+                                        threads=threads))
 
         pdnsutilCmd = [os.environ['PDNSUTIL'],
                        '--config-dir=%s' % confdir,
@@ -345,8 +426,7 @@ distributor-threads=1""".format(confdir=confdir,
         try:
             subprocess.check_output(pdnsutilCmd, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
-            print(e.output)
-            raise
+            raise AssertionError('%s failed (%d): %s' % (pdnsutilCmd, e.returncode, e.output))
 
     @classmethod
     def secureZone(cls, confdir, zonename, key=None):
@@ -373,18 +453,19 @@ distributor-threads=1""".format(confdir=confdir,
         try:
             subprocess.check_output(pdnsutilCmd, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
-            print(e.output)
-            raise
+            raise AssertionError('%s failed (%d): %s' % (pdnsutilCmd, e.returncode, e.output))
 
     @classmethod
     def generateAllAuthConfig(cls, confdir):
         if cls._auth_zones:
-            for auth_suffix, zones in cls._auth_zones.items():
+            for auth_suffix, zoneinfo in cls._auth_zones.items():
+                threads = zoneinfo['threads']
+                zones = zoneinfo['zones']
                 authconfdir = os.path.join(confdir, 'auth-%s' % auth_suffix)
 
                 os.mkdir(authconfdir)
 
-                cls.generateAuthConfig(authconfdir)
+                cls.generateAuthConfig(authconfdir, threads)
                 cls.generateAuthNamedConf(authconfdir, zones)
 
                 for zone in zones:
@@ -505,8 +586,7 @@ distributor-threads=1""".format(confdir=confdir,
         try:
             subprocess.check_output(rec_controlCmd, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
-            print(e.output)
-            raise
+            raise AssertionError('%s failed (%d): %s' % (rec_controlCmd, e.returncode, e.output))
 
     @classmethod
     def setUpSockets(cls):
@@ -632,9 +712,41 @@ distributor-threads=1""".format(confdir=confdir,
             message = dns.message.from_wire(data)
         return message
 
+    @classmethod
+    def sendTCPQueries(cls, queries, timeout=2.0):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if timeout:
+            sock.settimeout(timeout)
+
+        sock.connect(("127.0.0.1", cls._recursorPort))
+        data = []
+        try:
+            for query in queries:
+                wire = query.to_wire()
+                sock.send(struct.pack("!H", len(wire)))
+                sock.send(wire)
+            for i in range(len(queries)):
+                try:
+                    datalen = sock.recv(2)
+                    if datalen:
+                        (datalen,) = struct.unpack("!H", datalen)
+                        data.append(sock.recv(datalen))
+                except socket.timeout as e:
+                    continue
+        except socket.error as e:
+            print("Network error: %s" % (str(e)))
+            data = None
+        finally:
+            sock.close()
+
+        messages = []
+        for d in data:
+            messages.append(dns.message.from_wire(d))
+        return messages
+
     def setUp(self):
         # This function is called before every tests
-        return
+        super(RecursorTest, self).setUp()
 
     ## Functions for comparisons
     def assertMessageHasFlags(self, msg, flags, ednsflags=[]):
@@ -794,3 +906,35 @@ distributor-threads=1""".format(confdir=confdir,
 
         if not found:
             raise AssertionError("No SOA record found in the authority section:\n%s" % msg.to_text())
+
+    def assertResponseMatches(self, query, expectedRRs, response):
+        expectedResponse = dns.message.make_response(query)
+
+        if query.flags & dns.flags.RD:
+            expectedResponse.flags |= dns.flags.RA
+        if query.flags & dns.flags.CD:
+            expectedResponse.flags |= dns.flags.CD
+
+        expectedResponse.answer = expectedRRs
+        print(expectedResponse)
+        print(response)
+        self.assertEquals(response, expectedResponse)
+
+    @classmethod
+    def sendQuery(cls, name, rdtype, useTCP=False):
+        """Helper function that creates the query"""
+        msg = dns.message.make_query(name, rdtype, want_dnssec=True)
+        msg.flags |= dns.flags.AD
+
+        if useTCP:
+            return cls.sendTCPQuery(msg)
+        return cls.sendUDPQuery(msg)
+
+    def createQuery(self, name, rdtype, flags, ednsflags):
+        """Helper function that creates the query with the specified flags.
+        The flags need to be strings (no checking is performed atm)"""
+        msg = dns.message.make_query(name, rdtype)
+        msg.flags = dns.flags.from_text(flags)
+        msg.flags += dns.flags.from_text('RD')
+        msg.use_edns(edns=0, ednsflags=dns.flags.edns_from_text(ednsflags))
+        return msg

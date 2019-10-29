@@ -282,7 +282,7 @@ bool UeberBackend::getAuth(const DNSName &target, const QType& qtype, SOAData* s
   // com. We then store that and keep querying the other backends in case one
   // of them has a more specific zone but don't bother asking this specific
   // backend again for b.c.example.com., c.example.com. and example.com.
-  // If a backend has no match it may respond with an enmpty qname.
+  // If a backend has no match it may respond with an empty qname.
 
   bool found = false;
   int cstat;
@@ -330,6 +330,9 @@ bool UeberBackend::getAuth(const DNSName &target, const QType& qtype, SOAData* s
           DLOG(g_log<<Logger::Error<<"lookup: "<<shorter<<endl);
           if((*i)->getAuth(shorter, sd)) {
             DLOG(g_log<<Logger::Error<<"got: "<<sd->qname<<endl);
+            if(!sd->qname.empty() && !shorter.isPartOf(sd->qname)) {
+              throw PDNSException("getAuth() returned an SOA for the wrong zone. Zone '"+sd->qname.toLogString()+"' is not part of '"+shorter.toLogString()+"'");
+            }
             j->first = sd->qname.wirelength();
             j->second = *sd;
             if(sd->qname == shorter) {
@@ -409,6 +412,9 @@ bool UeberBackend::getSOAUncached(const DNSName &domain, SOAData &sd)
 
   for(vector<DNSBackend *>::const_iterator i=backends.begin();i!=backends.end();++i)
     if((*i)->getSOA(domain, sd)) {
+      if(domain != sd.qname) {
+        throw PDNSException("getSOA() returned an SOA for the wrong zone. Question: '"+domain.toLogString()+"', answer: '"+sd.qname.toLogString()+"'");
+      }
       if(d_cache_ttl) {
         DNSZoneRecord rr;
         rr.dr.d_name = sd.qname;
@@ -534,7 +540,7 @@ UeberBackend::~UeberBackend()
 }
 
 // this handle is more magic than most
-void UeberBackend::lookup(const QType &qtype,const DNSName &qname, DNSPacket *pkt_p, int zoneId)
+void UeberBackend::lookup(const QType &qtype,const DNSName &qname, int zoneId, DNSPacket *pkt_p)
 {
   if(d_stale) {
     g_log<<Logger::Error<<"Stale ueberbackend received question, signalling that we want to be recycled"<<endl;
@@ -574,7 +580,7 @@ void UeberBackend::lookup(const QType &qtype,const DNSName &qname, DNSPacket *pk
       //      cout<<"UeberBackend::lookup("<<qname<<"|"<<DNSRecordContent::NumberToType(qtype.getCode())<<"): uncached"<<endl;
       d_negcached=d_cached=false;
       d_answers.clear(); 
-      (d_handle.d_hinterBackend=backends[d_handle.i++])->lookup(qtype, qname,pkt_p,zoneId);
+      (d_handle.d_hinterBackend=backends[d_handle.i++])->lookup(qtype, qname,zoneId,pkt_p);
     } 
     else if(cstat==0) {
       //      cout<<"UeberBackend::lookup("<<qname<<"|"<<DNSRecordContent::NumberToType(qtype.getCode())<<"): NEGcached"<<endl;
@@ -675,7 +681,7 @@ bool UeberBackend::handle::get(DNSZoneRecord &r)
            <<" out of answers, taking next"<<endl);
       
       d_hinterBackend=parent->backends[i++];
-      d_hinterBackend->lookup(qtype,qname,pkt_p,parent->d_domain_id);
+      d_hinterBackend->lookup(qtype,qname,parent->d_domain_id,pkt_p);
     }
     else 
       break;

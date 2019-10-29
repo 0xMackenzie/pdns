@@ -56,10 +56,10 @@ public:
   };
 
   enum dsdigestalgorithm_t : uint8_t {
-    SHA1=1,
-    SHA256=2,
-    GOST=3,
-    SHA384=4
+    DIGEST_SHA1=1,
+    DIGEST_SHA256=2,
+    DIGEST_GOST=3,
+    DIGEST_SHA384=4
   };
 
   struct KeyMetaData
@@ -303,3 +303,4 @@ uint32_t calculateEditSOA(uint32_t old_serial, const string& kind, const DNSName
 // for SOA-EDIT-DNSUPDATE/API
 bool increaseSOARecord(DNSResourceRecord& dr, const string& increaseKind, const string& editKind);
 bool makeIncreasedSOARecord(SOAData& sd, const string& increaseKind, const string& editKind, DNSResourceRecord& rrout);
+DNSZoneRecord makeEditedDNSZRFromSOAData(DNSSECKeeper& dk, const SOAData& sd, DNSResourceRecord::Place place=DNSResourceRecord::ANSWER);

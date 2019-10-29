@@ -26,11 +26,10 @@
 #include "pdns/logger.hh"
 #include "pdns/iputils.hh"
 #include "pdns/dnspacket.hh"
-#include <cdb.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include "cdb.hh"
+#include "pdns/cdb.hh"
 #include "pdns/lock.hh"
 #include <boost/multi_index_container.hpp>
 #include <boost/multi_index/hashed_index.hpp>
@@ -68,7 +67,7 @@ class TinyDNSBackend : public DNSBackend
 public:
   // Methods for simple operation
   TinyDNSBackend(const string &suffix);
-  void lookup(const QType &qtype, const DNSName &qdomain, DNSPacket *pkt_p=0, int zoneId=-1) override;
+  void lookup(const QType &qtype, const DNSName &qdomain, int zoneId, DNSPacket *pkt_p=nullptr) override;
   bool list(const DNSName &target, int domain_id, bool include_disabled=false) override;
   bool get(DNSResourceRecord &rr) override;
   void getAllDomains(vector<DomainInfo> *domains, bool include_disabled=false) override;

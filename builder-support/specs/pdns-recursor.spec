@@ -35,6 +35,11 @@ BuildRequires: libatomic
 %if 0%{?rhel} >= 7
 BuildRequires: protobuf-compiler
 BuildRequires: protobuf-devel
+
+%if 0%{?rhel} == 7
+# No fstrm in EPEL 8 yet
+BuildRequires: fstrm-devel
+%endif
 %endif
 
 BuildRequires: openssl-devel
@@ -64,9 +69,10 @@ package if you need a dns cache for your network.
 
 %build
 %configure \
+    --enable-option-checking=fatal \
     --sysconfdir=%{_sysconfdir}/%{name} \
     --with-libsodium \
-    --with-netsnmp \
+    --with-net-snmp \
     --disable-silent-rules \
     --disable-static \
     --enable-unit-tests \

@@ -24,7 +24,6 @@
 #endif
 #include "packetcache.hh"
 #include "utility.hh"
-#include <errno.h>
 #include "communicator.hh"
 #include <set>
 #include <boost/utility.hpp>
@@ -119,7 +118,7 @@ void CommunicatorClass::mainloop(void)
     for(;;) {
       slaveRefresh(&P);
       masterUpdateCheck(&P);
-      tick=doNotifications(); // this processes any notification acknowledgements and actually send out our own notifications
+      tick=doNotifications(&P); // this processes any notification acknowledgements and actually send out our own notifications
       
       tick = min (tick, d_tickinterval); 
       
@@ -139,11 +138,14 @@ void CommunicatorClass::mainloop(void)
           if (extraSlaveRefresh)
             slaveRefresh(&P);
         }
-        else { 
+        else {
+          // eat up extra posts to avoid busy looping if many posts were done
+          while (d_any_sem.tryWait() == 0) {
+          }
           break; // something happened
         }
         // this gets executed at least once every second
-        doNotifications();
+        doNotifications(&P);
       }
     }
   }

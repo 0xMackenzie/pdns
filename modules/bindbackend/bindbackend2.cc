@@ -80,6 +80,9 @@ pthread_mutex_t Bind2Backend::s_supermaster_config_lock=PTHREAD_MUTEX_INITIALIZE
 pthread_mutex_t Bind2Backend::s_startup_lock=PTHREAD_MUTEX_INITIALIZER;
 string Bind2Backend::s_binddirectory;  
 
+template <typename T>
+std::mutex LookButDontTouch<T>::s_lock;
+
 BB2DomainInfo::BB2DomainInfo()
 {
   d_loaded=false;
@@ -203,17 +206,27 @@ bool Bind2Backend::startTransaction(const DNSName &qname, int id)
   d_transaction_id=id;
   BB2DomainInfo bbd;
   if(safeGetBBDomainInfo(id, &bbd)) {
-    d_transaction_tmpname=bbd.d_filename+"."+itoa(random());
-    d_of=std::unique_ptr<ofstream>(new ofstream(d_transaction_tmpname.c_str()));
+    d_transaction_tmpname = bbd.d_filename + "XXXXXX";
+    int fd = mkstemp(&d_transaction_tmpname.at(0));
+    if (fd == -1) {
+      throw DBException("Unable to create a unique temporary zonefile '"+d_transaction_tmpname+"': "+stringerror());
+      return false;
+    }
+
+    d_of = std::unique_ptr<ofstream>(new ofstream(d_transaction_tmpname.c_str()));
     if(!*d_of) {
       unlink(d_transaction_tmpname.c_str());
+      close(fd);
+      fd = -1;
       d_of.reset();
       throw DBException("Unable to open temporary zonefile '"+d_transaction_tmpname+"': "+stringerror());
     }
-    
+    close(fd);
+    fd = -1;
+
     *d_of<<"; Written by PowerDNS, don't edit!"<<endl;
     *d_of<<"; Zone '"<<bbd.d_name<<"' retrieved from master "<<endl<<"; at "<<nowTime()<<endl; // insert master info here again
-    
+
     return true;
   }
   return false;
@@ -251,7 +264,7 @@ bool Bind2Backend::abortTransaction()
   return true;
 }
 
-bool Bind2Backend::feedRecord(const DNSResourceRecord &rr, const DNSName &ordername)
+bool Bind2Backend::feedRecord(const DNSResourceRecord &rr, const DNSName &ordername, bool ordernameIsNSEC3)
 {
   BB2DomainInfo bbd;
   if (!safeGetBBDomainInfo(d_transaction_id, &bbd))
@@ -363,7 +376,11 @@ void Bind2Backend::getAllDomains(vector<DomainInfo> *domains, bool include_disab
     // do not corrupt di if domain supplied by another backend.
     if (di.backend != this)
       continue;
-    this->getSOA(di.zone, soadata);
+    try {
+      this->getSOA(di.zone, soadata);
+    } catch(...) {
+      continue;
+    }
     di.serial=soadata.serial;
   }
 }
@@ -433,6 +450,13 @@ void Bind2Backend::alsoNotifies(const DNSName& domain, set<string> *ips)
   // combine global list with local list
   for(set<string>::iterator i = this->alsoNotify.begin(); i != this->alsoNotify.end(); i++) {
     (*ips).insert(*i);
+  }
+  // check metadata too if available
+  vector<string> meta;
+  if (getDomainMetadata(domain, "ALSO-NOTIFY", meta)) {
+    for(const auto& str: meta) {
+      (*ips).insert(str);
+    }
   }
   ReadLock rl(&s_state_lock);  
   for(state_t::const_iterator i = s_state.begin(); i != s_state.end() ; ++i) {
@@ -603,6 +627,7 @@ string Bind2Backend::DLAddDomainHandler(const vector<string>&parts, Utility::pid
   bbd.d_loaded=true;
   bbd.d_lastcheck=0;
   bbd.d_status="parsing into memory";
+  bbd.setCtime();
 
   safePutBBDomainInfo(bbd);
 
@@ -630,6 +655,7 @@ Bind2Backend::Bind2Backend(const string &suffix, bool loadZones)
   setArgPrefix("bind"+suffix);
   d_logprefix="[bind"+suffix+"backend]";
   d_hybrid=mustDo("hybrid");
+  d_transaction_id=0;
   s_ignore_broken_records=mustDo("ignore-broken-records");
 
   if (!loadZones && d_hybrid)
@@ -637,7 +663,6 @@ Bind2Backend::Bind2Backend(const string &suffix, bool loadZones)
 
   Lock l(&s_startup_lock);
   
-  d_transaction_id=0;
   setupDNSSEC();
   if(!s_first) {
     return;
@@ -1031,41 +1056,42 @@ bool Bind2Backend::getBeforeAndAfterNamesAbsolute(uint32_t id, const DNSName& qn
   }
 }
 
-void Bind2Backend::lookup(const QType &qtype, const DNSName &qname, DNSPacket *pkt_p, int zoneId )
+void Bind2Backend::lookup(const QType &qtype, const DNSName &qname, int zoneId, DNSPacket *pkt_p )
 {
   d_handle.reset();
-  DNSName domain(qname);
 
   static bool mustlog=::arg().mustDo("query-logging");
-  if(mustlog) 
-    g_log<<Logger::Warning<<"Lookup for '"<<qtype.getName()<<"' of '"<<domain<<"' within zoneID "<<zoneId<<endl;
-  bool found=false;
+
+  bool found;
+  DNSName domain;
   BB2DomainInfo bbd;
 
-  do {
-    found = safeGetBBDomainInfo(domain, &bbd);
-  } while ((!found || (zoneId != (int)bbd.d_id && zoneId != -1)) && domain.chopOff());
+  if(mustlog)
+    g_log<<Logger::Warning<<"Lookup for '"<<qtype.getName()<<"' of '"<<qname<<"' within zoneID "<<zoneId<<endl;
+
+  if (zoneId >= 0) {
+    if ((found = (safeGetBBDomainInfo(zoneId, &bbd) && qname.isPartOf(bbd.d_name)))) {
+      domain = bbd.d_name;
+    }
+  } else {
+    domain = qname;
+    do {
+      found = safeGetBBDomainInfo(domain, &bbd);
+    } while (!found && qtype != QType::SOA && domain.chopOff());
+  }
 
   if(!found) {
     if(mustlog)
-      g_log<<Logger::Warning<<"Found no authoritative zone for "<<qname<<endl;
+      g_log<<Logger::Warning<<"Found no authoritative zone for '"<<qname<<"' and/or id "<<bbd.d_id<<endl;
     d_handle.d_list=false;
     return;
   }
 
   if(mustlog)
     g_log<<Logger::Warning<<"Found a zone '"<<domain<<"' (with id " << bbd.d_id<<") that might contain data "<<endl;
-    
-  d_handle.id=bbd.d_id;
-  
-  DLOG(g_log<<"Bind2Backend constructing handle for search for "<<qtype.getName()<<" for "<<
-       qname<<endl);
-  
-  if(domain.empty())
-    d_handle.qname=qname;
-  else if(qname.isPartOf(domain))
-    d_handle.qname=qname.makeRelative(domain); // strip domain name
 
+  d_handle.id=bbd.d_id;
+  d_handle.qname=qname.makeRelative(domain); // strip domain name
   d_handle.qtype=qtype;
   d_handle.domain=domain;
 
@@ -1262,11 +1288,13 @@ BB2DomainInfo Bind2Backend::createDomainEntry(const DNSName& domain, const strin
   }
   
   BB2DomainInfo bbd;
+  bbd.d_kind = DomainInfo::Native;
   bbd.d_id = newid;
   bbd.d_records = shared_ptr<recordstorage_t >(new recordstorage_t);
   bbd.d_name = domain;
   bbd.setCheckInterval(getArgAsNum("check-interval"));
   bbd.d_filename = filename;
+  
   return bbd;
 }
 
@@ -1300,6 +1328,7 @@ bool Bind2Backend::createSlaveDomain(const string &ip, const DNSName& domain, co
   BB2DomainInfo bbd = createDomainEntry(domain, filename);
   bbd.d_kind = DomainInfo::Slave;
   bbd.d_masters.push_back(ComboAddress(ip, 53));
+  bbd.setCtime();
   safePutBBDomainInfo(bbd);
   return true;
 }
@@ -1316,7 +1345,10 @@ bool Bind2Backend::searchRecords(const string &pattern, int maxResults, vector<D
 
     for(state_t::const_iterator i = s_state.begin(); i != s_state.end() ; ++i) {
       BB2DomainInfo h;
-      safeGetBBDomainInfo(i->d_id, &h);
+      if (!safeGetBBDomainInfo(i->d_id, &h)) {
+        continue;
+      }
+
       shared_ptr<const recordstorage_t> rhandle = h.d_records.get();
 
       for(recordstorage_t::const_iterator ri = rhandle->begin(); result.size() < static_cast<vector<DNSResourceRecord>::size_type>(maxResults) && ri != rhandle->end(); ri++) {
@@ -1352,6 +1384,7 @@ class Bind2Factory : public BackendFactory
          declare(suffix,"supermasters","List of IP-addresses of supermasters","");
          declare(suffix,"supermaster-destdir","Destination directory for newly added slave zones",::arg()["config-dir"]);
          declare(suffix,"dnssec-db","Filename to store & access our DNSSEC metadatabase, empty for none", "");         
+         declare(suffix,"dnssec-db-journal-mode","SQLite3 journal mode", "WAL");
          declare(suffix,"hybrid","Store DNSSEC metadata in other backend","no");
       }
 

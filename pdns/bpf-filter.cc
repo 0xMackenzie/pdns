@@ -28,6 +28,8 @@
 
 #include "ext/libbpf/libbpf.h"
 
+#include "misc.hh"
+
 static __u64 ptr_to_u64(void *ptr)
 {
   return (__u64) (unsigned long) ptr;
@@ -36,7 +38,8 @@ static __u64 ptr_to_u64(void *ptr)
 int bpf_create_map(enum bpf_map_type map_type, int key_size, int value_size,
 		   int max_entries)
 {
-  union bpf_attr attr = { 0 };
+  union bpf_attr attr;
+  memset(&attr, 0, sizeof(attr));
   attr.map_type = map_type;
   attr.key_size = key_size;
   attr.value_size = value_size;
@@ -46,7 +49,8 @@ int bpf_create_map(enum bpf_map_type map_type, int key_size, int value_size,
 
 int bpf_update_elem(int fd, void *key, void *value, unsigned long long flags)
 {
-  union bpf_attr attr = { 0 };
+  union bpf_attr attr;
+  memset(&attr, 0, sizeof(attr));
   attr.map_fd = fd;
   attr.key = ptr_to_u64(key);
   attr.value = ptr_to_u64(value);
@@ -56,7 +60,8 @@ int bpf_update_elem(int fd, void *key, void *value, unsigned long long flags)
 
 int bpf_lookup_elem(int fd, void *key, void *value)
 {
-  union bpf_attr attr = { 0 };
+  union bpf_attr attr;
+  memset(&attr, 0, sizeof(attr));
   attr.map_fd = fd;
   attr.key = ptr_to_u64(key);
   attr.value = ptr_to_u64(value);
@@ -65,7 +70,8 @@ int bpf_lookup_elem(int fd, void *key, void *value)
 
 int bpf_delete_elem(int fd, void *key)
 {
-  union bpf_attr attr = { 0 };
+  union bpf_attr attr;
+  memset(&attr, 0, sizeof(attr));
   attr.map_fd = fd;
   attr.key = ptr_to_u64(key);
   return syscall(SYS_bpf, BPF_MAP_DELETE_ELEM, &attr, sizeof(attr));
@@ -73,7 +79,8 @@ int bpf_delete_elem(int fd, void *key)
 
 int bpf_get_next_key(int fd, void *key, void *next_key)
 {
-  union bpf_attr attr = { 0 };
+  union bpf_attr attr;
+  memset(&attr, 0, sizeof(attr));
   attr.map_fd = fd;
   attr.key = ptr_to_u64(key);
   attr.next_key = ptr_to_u64(next_key);
@@ -85,7 +92,8 @@ int bpf_prog_load(enum bpf_prog_type prog_type,
 		  const char *license, int kern_version)
 {
   char log_buf[65535];
-  union bpf_attr attr = { 0 };
+  union bpf_attr attr;
+  memset(&attr, 0, sizeof(attr));
   attr.prog_type = prog_type;
   attr.insns = ptr_to_u64((void *) insns);
   attr.insn_cnt = prog_len / sizeof(struct bpf_insn);
@@ -110,7 +118,7 @@ int bpf_prog_load(enum bpf_prog_type prog_type,
         return res;
       }
     }
-    throw std::runtime_error("Error loading BPF program: (" + std::string(strerror(errno)) + "):\n" + std::string(log_buf));
+    throw std::runtime_error("Error loading BPF program: (" + stringerror() + "):\n" + std::string(log_buf));
   }
   return res;
 }
@@ -135,22 +143,22 @@ BPFFilter::BPFFilter(uint32_t maxV4Addresses, uint32_t maxV6Addresses, uint32_t 
 {
   d_v4map.fd = bpf_create_map(BPF_MAP_TYPE_HASH, sizeof(uint32_t), sizeof(uint64_t), (int) maxV4Addresses);
   if (d_v4map.fd == -1) {
-    throw std::runtime_error("Error creating a BPF v4 map of size " + std::to_string(maxV4Addresses) + ": " + std::string(strerror(errno)));
+    throw std::runtime_error("Error creating a BPF v4 map of size " + std::to_string(maxV4Addresses) + ": " + stringerror());
   }
 
   d_v6map.fd = bpf_create_map(BPF_MAP_TYPE_HASH, sizeof(struct KeyV6), sizeof(uint64_t), (int) maxV6Addresses);
   if (d_v6map.fd == -1) {
-    throw std::runtime_error("Error creating a BPF v6 map of size " + std::to_string(maxV6Addresses) + ": " + std::string(strerror(errno)));
+    throw std::runtime_error("Error creating a BPF v6 map of size " + std::to_string(maxV6Addresses) + ": " + stringerror());
   }
 
   d_qnamemap.fd = bpf_create_map(BPF_MAP_TYPE_HASH, sizeof(struct QNameKey), sizeof(struct QNameValue), (int) maxQNames);
   if (d_qnamemap.fd == -1) {
-    throw std::runtime_error("Error creating a BPF qname map of size " + std::to_string(maxQNames) + ": " + std::string(strerror(errno)));
+    throw std::runtime_error("Error creating a BPF qname map of size " + std::to_string(maxQNames) + ": " + stringerror());
   }
 
   d_filtermap.fd = bpf_create_map(BPF_MAP_TYPE_PROG_ARRAY, sizeof(uint32_t), sizeof(uint32_t), 1);
   if (d_filtermap.fd == -1) {
-    throw std::runtime_error("Error creating a BPF program map of size 1: " + std::string(strerror(errno)));
+    throw std::runtime_error("Error creating a BPF program map of size 1: " + stringerror());
   }
 
   struct bpf_insn main_filter[] = {
@@ -163,7 +171,7 @@ BPFFilter::BPFFilter(uint32_t maxV4Addresses, uint32_t maxV6Addresses, uint32_t 
                                   "GPL",
                                   0);
   if (d_mainfilter.fd == -1) {
-    throw std::runtime_error("Error loading BPF main filter: " + std::string(strerror(errno)));
+    throw std::runtime_error("Error loading BPF main filter: " + stringerror());
   }
 
   struct bpf_insn qname_filter[] = {
@@ -176,13 +184,13 @@ BPFFilter::BPFFilter(uint32_t maxV4Addresses, uint32_t maxV6Addresses, uint32_t 
                                    "GPL",
                                    0);
   if (d_qnamefilter.fd == -1) {
-    throw std::runtime_error("Error loading BPF qname filter: " + std::string(strerror(errno)));
+    throw std::runtime_error("Error loading BPF qname filter: " + stringerror());
   }
 
   uint32_t key = 0;
   int res = bpf_update_elem(d_filtermap.fd, &key, &d_qnamefilter.fd, BPF_ANY);
   if (res != 0) {
-    throw std::runtime_error("Error updating BPF filters map: " + std::string(strerror(errno)));
+    throw std::runtime_error("Error updating BPF filters map: " + stringerror());
   }
 }
 
@@ -191,7 +199,7 @@ void BPFFilter::addSocket(int sock)
   int res = setsockopt(sock, SOL_SOCKET, SO_ATTACH_BPF, &d_mainfilter.fd, sizeof(d_mainfilter.fd));
 
   if (res != 0) {
-    throw std::runtime_error("Error attaching BPF filter to this socket: " + std::string(strerror(errno)));
+    throw std::runtime_error("Error attaching BPF filter to this socket: " + stringerror());
   }
 }
 
@@ -200,7 +208,7 @@ void BPFFilter::removeSocket(int sock)
   int res = setsockopt(sock, SOL_SOCKET, SO_DETACH_BPF, &d_mainfilter.fd, sizeof(d_mainfilter.fd));
 
   if (res != 0) {
-    throw std::runtime_error("Error detaching BPF filter from this socket: " + std::string(strerror(errno)));
+    throw std::runtime_error("Error detaching BPF filter from this socket: " + stringerror());
   }
 }
 
@@ -249,7 +257,7 @@ void BPFFilter::block(const ComboAddress& addr)
   }
 
   if (res != 0) {
-    throw std::runtime_error("Error adding blocked address " + addr.toString() + ": " + std::string(strerror(errno)));
+    throw std::runtime_error("Error adding blocked address " + addr.toString() + ": " + stringerror());
   }
 }
 
@@ -279,7 +287,7 @@ void BPFFilter::unblock(const ComboAddress& addr)
   }
 
   if (res != 0) {
-    throw std::runtime_error("Error removing blocked address " + addr.toString() + ": " + std::string(strerror(errno)));
+    throw std::runtime_error("Error removing blocked address " + addr.toString() + ": " + stringerror());
   }
 }
 
@@ -315,7 +323,7 @@ void BPFFilter::block(const DNSName& qname, uint16_t qtype)
     }
 
     if (res != 0) {
-      throw std::runtime_error("Error adding blocked qname " + qname.toLogString() + ": " + std::string(strerror(errno)));
+      throw std::runtime_error("Error adding blocked qname " + qname.toLogString() + ": " + stringerror());
     }
   }
 }
@@ -339,7 +347,7 @@ void BPFFilter::unblock(const DNSName& qname, uint16_t qtype)
       d_qNamesCount--;
     }
     else {
-      throw std::runtime_error("Error removing qname address " + qname.toLogString() + ": " + std::string(strerror(errno)));
+      throw std::runtime_error("Error removing qname address " + qname.toLogString() + ": " + stringerror());
     }
   }
 }
@@ -353,8 +361,8 @@ std::vector<std::pair<ComboAddress, uint64_t> > BPFFilter::getAddrStats()
   uint32_t nextV4Key;
   uint64_t value;
   int res = bpf_get_next_key(d_v4map.fd, &v4Key, &nextV4Key);
-  sockaddr_in v4Addr = { 0 };
-  v4Addr.sin_port = 0;
+  sockaddr_in v4Addr;
+  memset(&v4Addr, 0, sizeof(v4Addr));
   v4Addr.sin_family = AF_INET;
 
   while (res == 0) {
@@ -369,9 +377,10 @@ std::vector<std::pair<ComboAddress, uint64_t> > BPFFilter::getAddrStats()
 
   uint8_t v6Key[16];
   uint8_t nextV6Key[16];
-  sockaddr_in6 v6Addr = { 0 };
+  sockaddr_in6 v6Addr;
+  memset(&v6Addr, 0, sizeof(v6Addr));
   v6Addr.sin6_family = AF_INET6;
-  v6Addr.sin6_port = 0;
+
   static_assert(sizeof(v6Addr.sin6_addr.s6_addr) == sizeof(v6Key), "POSIX mandates s6_addr to be an array of 16 uint8_t");
   for (size_t idx = 0; idx < sizeof(v6Key); idx++) {
     v6Key[idx] = 0;

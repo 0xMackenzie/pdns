@@ -175,7 +175,7 @@ void setSocketBuffer(int fd, int optname, uint32_t size)
   }
 
   if (setsockopt(fd, SOL_SOCKET, optname, (char*)&size, sizeof(size)) < 0 )
-    cerr<<"Warning: unable to raise socket buffer size to "<<size<<": "<<strerror(errno)<<endl;
+    cerr<<"Warning: unable to raise socket buffer size to "<<size<<": "<<stringerror()<<endl;
 }
 
 static void setSocketReceiveBuffer(int fd, uint32_t size)
@@ -404,7 +404,7 @@ void measureResultAndClean(qids_t::const_iterator iter)
 }
 
 
-Socket *s_socket;
+std::unique_ptr<Socket> s_socket = nullptr;
 
 void receiveFromReference()
 try
@@ -772,7 +772,7 @@ try
   g_timeoutMsec=g_vm["timeout-msec"].as<uint32_t>();
 
   PcapPacketReader pr(g_vm["pcap-source"].as<string>());
-  s_socket= new Socket(AF_INET, SOCK_DGRAM);
+  s_socket= make_unique<Socket>(AF_INET, SOCK_DGRAM);
 
   s_socket->setNonBlocking();
 

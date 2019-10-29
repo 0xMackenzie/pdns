@@ -112,7 +112,7 @@ try
       tkrc.d_keysize = output.size();
       tkrc.d_key = output;
       tkrc.d_othersize = 0;
-      pwtkey.getHeader()->id = dns_random(0xffff);
+      pwtkey.getHeader()->id = dns_random_uint16();
       pwtkey.startRecord(gssctx.getLabel(), QType::TKEY, 3600, QClass::ANY, DNSResourceRecord::ADDITIONAL, false);
       tkrc.toPacket(pwtkey);
       pwtkey.commit();
@@ -123,22 +123,22 @@ try
       len = htons(packet.size());
       if(sock.write((char *) &len, 2) != 2)
         throw PDNSException("tcp write failed");
-      sock.writen(string((char*)&*packet.begin(), (char*)&*packet.end()));
+      sock.writen(string((char*)&packet[0], packet.size()));
       if(sock.read((char *) &len, 2) != 2)
         throw PDNSException("tcp read failed");
 
       len=ntohs(len);
-      char *creply = new char[len];
+      std::unique_ptr<char[]> creply(new char[len]);
       int n=0;
       int numread;
       while(n<len) {
-        numread=sock.read(creply+n, len-n);
+        numread=sock.read(creply.get()+n, len-n);
         if(numread<0)
           throw PDNSException("tcp read failed");
         n+=numread;
       }
 
-      MOADNSParser mdp(false, string(creply, len));
+      MOADNSParser mdp(false, string(creply.get(), len));
        if (mdp.d_header.rcode != 0) {
          throw PDNSException(string("Remote server refused: ") + std::to_string(mdp.d_header.rcode));
        }
@@ -161,7 +161,7 @@ try
 
   DNSPacketWriter pw(packet, DNSName(argv[3]), 252);
 
-  pw.getHeader()->id = dns_random(0xffff);
+  pw.getHeader()->id = dns_random_uint16();
 
   if (tsig) {
     TSIGRecordContent trc;
@@ -177,7 +177,7 @@ try
   if(sock.write((char *) &len, 2) != 2)
     throw PDNSException("tcp write failed");
 
-  sock.writen(string((char*)&*packet.begin(), (char*)&*packet.end()));
+  sock.writen(string(packet.begin(), packet.end()));
 
   bool isNSEC3 = false;
   int soacount=0;
@@ -193,17 +193,17 @@ try
       throw PDNSException("tcp read failed");
 
     len=ntohs(len);
-    char *creply = new char[len];
+    std::unique_ptr<char[]> creply(new char[len]);
     int n=0;
     int numread;
     while(n<len) {
-      numread=sock.read(creply+n, len-n);
+      numread=sock.read(creply.get()+n, len-n);
       if(numread<0)
         throw PDNSException("tcp read failed");
       n+=numread;
     }
 
-    MOADNSParser mdp(false, string(creply, len));
+    MOADNSParser mdp(false, string(creply.get(), len));
     if (mdp.d_header.rcode != 0) {
       throw PDNSException(string("Remote server refused: ") + std::to_string(mdp.d_header.rcode));
     }
@@ -274,8 +274,6 @@ try
       }while(shorter.chopOff());
 
     }
-
-    delete[] creply;
   }
 
   if (isNSEC3 && unhash)

@@ -9,17 +9,17 @@ Synopsis
 Description
 -----------
 
-:program:`zone2sql` parses Bind named.conf files and zonefiles and outputs SQL
+:program:`zone2sql` parses BIND named.conf files and zonefiles and outputs SQL
 on standard out, which can then be fed to your database.
 
-:program:`zone2sql` understands the Bind master file extension ``$GENERATE``
+:program:`zone2sql` understands the BIND master file extension ``$GENERATE``
 and will also honour ``$ORIGIN`` and ``$TTL``.
 
 For backends supporting slave operation there is also an option to keep
 slave zones as slaves, and not convert them to native operation.
 
 :program:`zone2sql` can generate SQL for the Generic MySQL, Generic PostgreSQL,
-Generic SQLite3 and Generic Oracle backends.
+Generic SQLite3 backend.
 
 Options
 -------
@@ -27,7 +27,7 @@ Options
 INPUT Options
 -------------
 
---named-conf=<PATH>         Read *PATH* to get the bind configuration
+--named-conf=<PATH>         Read *PATH* to get the BIND configuration
 --zone=<PATH>               Parse only the zone file at *PATH* Conflicts with **--named-conf** parameter.
 --zone-name=<NAME>          When parsing a single zone without $ORIGIN statement, set *ZONE* as
                             the zone name.
@@ -44,14 +44,6 @@ BACKENDS
 --gsqlite
     Output in format suitable for the default configuration of the
     Generic SQLite3 backend.
---goracle
-    Output in format suitable for the default configuration of the
-    Generic Oracle backend.
---mydns
-    Output in a format suitable for the MyDNS backend.
---oracle
-    Output in format suitable for the default configuration of the
-    Oracle backend.
 
 OUTPUT Options
 --------------

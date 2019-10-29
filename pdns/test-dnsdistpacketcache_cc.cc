@@ -17,7 +17,7 @@ BOOST_AUTO_TEST_SUITE(test_dnsdistpacketcache_cc)
 BOOST_AUTO_TEST_CASE(test_PacketCacheSimple) {
   const size_t maxEntries = 150000;
   DNSDistPacketCache PC(maxEntries, 86400, 1);
-  BOOST_CHECK_EQUAL(PC.getSize(), 0);
+  BOOST_CHECK_EQUAL(PC.getSize(), 0U);
   struct timespec queryTime;
   gettime(&queryTime);  // does not have to be accurate ("realTime") in tests
 
@@ -40,7 +40,7 @@ BOOST_AUTO_TEST_CASE(test_PacketCacheSimple) {
       pwR.getHeader()->ra = 1;
       pwR.getHeader()->qr = 1;
       pwR.getHeader()->id = pwQ.getHeader()->id;
-      pwR.startRecord(a, QType::A, 100, QClass::IN, DNSResourceRecord::ANSWER);
+      pwR.startRecord(a, QType::A, 7200, QClass::IN, DNSResourceRecord::ANSWER);
       pwR.xfr32BitInt(0x01020304);
       pwR.commit();
       uint16_t responseLen = response.size();
@@ -86,12 +86,12 @@ BOOST_AUTO_TEST_CASE(test_PacketCacheSimple) {
       DNSQuestion dq(&a, QType::A, QClass::IN, 0, &remote, &remote, (struct dnsheader*) query.data(), query.size(), query.size(), false, &queryTime);
       bool found = PC.get(dq, a.wirelength(), 0, responseBuf, &responseBufSize, &key, subnet, dnssecOK);
       if (found == true) {
-        PC.expungeByName(a);
-        deleted++;
+        auto removed = PC.expungeByName(a);
+        BOOST_CHECK_EQUAL(removed, 1U);
+        deleted += removed;
       }
     }
     BOOST_CHECK_EQUAL(PC.getSize(), counter - skipped - deleted);
-
 
     size_t matches=0;
     vector<DNSResourceRecord> entry;
@@ -111,10 +111,15 @@ BOOST_AUTO_TEST_CASE(test_PacketCacheSimple) {
         matches++;
       }
     }
-    BOOST_CHECK_EQUAL(matches, expected);
 
-    PC.expungeByName(DNSName(" hello"), QType::ANY, true);
-    BOOST_CHECK_EQUAL(PC.getSize(), 0);
+    /* in the unlikely event that the test took so long that the entries did expire.. */
+    auto expired = PC.purgeExpired();
+    BOOST_CHECK_EQUAL(matches + expired, expected);
+
+    auto remaining = PC.getSize();
+    auto removed = PC.expungeByName(DNSName(" hello"), QType::ANY, true);
+    BOOST_CHECK_EQUAL(PC.getSize(), 0U);
+    BOOST_CHECK_EQUAL(removed, remaining);
   }
   catch(PDNSException& e) {
     cerr<<"Had error: "<<e.reason<<endl;
@@ -290,7 +295,7 @@ BOOST_AUTO_TEST_CASE(test_PacketCacheNXDomainTTL) {
   }
 }
 
-static DNSDistPacketCache PC(500000);
+static DNSDistPacketCache g_PC(500000);
 
 static void *threadMangler(void* off)
 {
@@ -323,9 +328,9 @@ static void *threadMangler(void* off)
       boost::optional<Netmask> subnet;
       auto dh = reinterpret_cast<dnsheader*>(query.data());
       DNSQuestion dq(&a, QType::A, QClass::IN, 0, &remote, &remote, dh, query.size(), query.size(), false, &queryTime);
-      PC.get(dq, a.wirelength(), 0, responseBuf, &responseBufSize, &key, subnet, dnssecOK);
+      g_PC.get(dq, a.wirelength(), 0, responseBuf, &responseBufSize, &key, subnet, dnssecOK);
 
-      PC.insert(key, subnet, *(getFlagsFromDNSHeader(dh)), dnssecOK, a, QType::A, QClass::IN, (const char*) response.data(), responseLen, false, 0, boost::none);
+      g_PC.insert(key, subnet, *(getFlagsFromDNSHeader(dh)), dnssecOK, a, QType::A, QClass::IN, (const char*) response.data(), responseLen, false, 0, boost::none);
     }
   }
   catch(PDNSException& e) {
@@ -358,7 +363,7 @@ static void *threadReader(void* off)
       uint32_t key = 0;
       boost::optional<Netmask> subnet;
       DNSQuestion dq(&a, QType::A, QClass::IN, 0, &remote, &remote, (struct dnsheader*) query.data(), query.size(), query.size(), false, &queryTime);
-      bool found = PC.get(dq, a.wirelength(), 0, responseBuf, &responseBufSize, &key, subnet, dnssecOK);
+      bool found = g_PC.get(dq, a.wirelength(), 0, responseBuf, &responseBufSize, &key, subnet, dnssecOK);
       if (!found) {
 	g_missing++;
       }
@@ -380,15 +385,15 @@ BOOST_AUTO_TEST_CASE(test_PacketCacheThreaded) {
     for(int i=0; i < 4 ; ++i)
       pthread_join(tid[i], &res);
 
-    BOOST_CHECK_EQUAL(PC.getSize() + PC.getDeferredInserts() + PC.getInsertCollisions(), 400000);
-    BOOST_CHECK_SMALL(1.0*PC.getInsertCollisions(), 10000.0);
+    BOOST_CHECK_EQUAL(g_PC.getSize() + g_PC.getDeferredInserts() + g_PC.getInsertCollisions(), 400000U);
+    BOOST_CHECK_SMALL(1.0*g_PC.getInsertCollisions(), 10000.0);
 
     for(int i=0; i < 4; ++i)
       pthread_create(&tid[i], 0, threadReader, (void*)(i*1000000UL));
     for(int i=0; i < 4 ; ++i)
       pthread_join(tid[i], &res);
 
-    BOOST_CHECK((PC.getDeferredInserts() + PC.getDeferredLookups() + PC.getInsertCollisions()) >= g_missing);
+    BOOST_CHECK((g_PC.getDeferredInserts() + g_PC.getDeferredLookups() + g_PC.getInsertCollisions()) >= g_missing);
   }
   catch(PDNSException& e) {
     cerr<<"Had error: "<<e.reason<<endl;
@@ -400,7 +405,7 @@ BOOST_AUTO_TEST_CASE(test_PacketCacheThreaded) {
 BOOST_AUTO_TEST_CASE(test_PCCollision) {
   const size_t maxEntries = 150000;
   DNSDistPacketCache PC(maxEntries, 86400, 1, 60, 3600, 60, false, 1, true, true);
-  BOOST_CHECK_EQUAL(PC.getSize(), 0);
+  BOOST_CHECK_EQUAL(PC.getSize(), 0U);
 
   DNSName qname("www.powerdns.com.");
   uint16_t qtype = QType::AAAA;
@@ -447,7 +452,7 @@ BOOST_AUTO_TEST_CASE(test_PCCollision) {
     pwR.commit();
 
     PC.insert(key, subnetOut, *(getFlagsFromDNSHeader(pwR.getHeader())), dnssecOK, qname, qtype, QClass::IN, reinterpret_cast<const char*>(response.data()), response.size(), false, RCode::NoError, boost::none);
-    BOOST_CHECK_EQUAL(PC.getSize(), 1);
+    BOOST_CHECK_EQUAL(PC.getSize(), 1U);
 
     found = PC.get(dq, qname.wirelength(), 0, responseBuf, &responseBufSize, &key, subnetOut, dnssecOK);
     BOOST_CHECK_EQUAL(found, true);
@@ -480,14 +485,14 @@ BOOST_AUTO_TEST_CASE(test_PCCollision) {
     BOOST_CHECK_EQUAL(secondKey, key);
     BOOST_REQUIRE(subnetOut);
     BOOST_CHECK_EQUAL(subnetOut->toString(), opt.source.toString());
-    BOOST_CHECK_EQUAL(PC.getLookupCollisions(), 1);
+    BOOST_CHECK_EQUAL(PC.getLookupCollisions(), 1U);
   }
 }
 
 BOOST_AUTO_TEST_CASE(test_PCDNSSECCollision) {
   const size_t maxEntries = 150000;
   DNSDistPacketCache PC(maxEntries, 86400, 1, 60, 3600, 60, false, 1, true, true);
-  BOOST_CHECK_EQUAL(PC.getSize(), 0);
+  BOOST_CHECK_EQUAL(PC.getSize(), 0U);
 
   DNSName qname("www.powerdns.com.");
   uint16_t qtype = QType::AAAA;
@@ -527,7 +532,7 @@ BOOST_AUTO_TEST_CASE(test_PCDNSSECCollision) {
     pwR.commit();
 
     PC.insert(key, subnetOut, *(getFlagsFromDNSHeader(pwR.getHeader())), /* DNSSEC OK is set */ true, qname, qtype, QClass::IN, reinterpret_cast<const char*>(response.data()), response.size(), false, RCode::NoError, boost::none);
-    BOOST_CHECK_EQUAL(PC.getSize(), 1);
+    BOOST_CHECK_EQUAL(PC.getSize(), 1U);
 
     found = PC.get(dq, qname.wirelength(), 0, responseBuf, &responseBufSize, &key, subnetOut, false);
     BOOST_CHECK_EQUAL(found, false);

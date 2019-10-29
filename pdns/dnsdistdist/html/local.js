@@ -149,7 +149,6 @@ $(document).ready(function() {
                 $("#acl-drops").text(data["acl-drops"]);
                 $("#dyn-drops").text(data["dyn-blocked"]);
                 $("#rule-drops").text(data["rule-drop"]);
-		$("#blockfilter-drops").text(data["block-filter"]);
                 $("#uptime").text(moment.duration(data["uptime"]*1000.0).humanize());
                 $("#latency").text((data["latency-avg10000"]/1000.0).toFixed(2));
                 if(!gdata["cpu-sys-msec"]) 
@@ -194,7 +193,8 @@ $(document).ready(function() {
                      var bouw='<table width="100%"><tr align=right><th>#</th><th align=left>Name</th><th align=left>Address</th><th>Status</th><th>Latency</th><th>Queries</th><th>Drops</th><th>QPS</th><th>Out</th><th>Weight</th><th>Order</th><th align=left>Pools</th></tr>';
                      $.each(data["servers"], function(a,b) {
                          bouw = bouw + ("<tr align=right><td>"+b["id"]+"</td><td align=left>"+b["name"]+"</td><td align=left>"+b["address"]+"</td><td>"+b["state"]+"</td>");
-                         bouw = bouw + ("<td>"+(b["latency"]).toFixed(2)+"</td><td>"+b["queries"]+"</td><td>"+b["reuseds"]+"</td><td>"+(b["qps"]).toFixed(2)+"</td><td>"+b["outstanding"]+"</td>");
+                         var latency = (b["latency"] === null) ? 0.0 : b["latency"];
+                         bouw = bouw + ("<td>"+latency.toFixed(2)+"</td><td>"+b["queries"]+"</td><td>"+b["reuseds"]+"</td><td>"+(b["qps"]).toFixed(2)+"</td><td>"+b["outstanding"]+"</td>");
                          bouw = bouw + ("<td>"+b["weight"]+"</td><td>"+b["order"]+"</td><td align=left>"+b["pools"]+"</td></tr>");
                      }); 
                      bouw = bouw + "</table>";

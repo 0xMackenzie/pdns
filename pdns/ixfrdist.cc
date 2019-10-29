@@ -271,7 +271,7 @@ static void updateCurrentZoneInfo(const DNSName& domain, std::shared_ptr<ixfrinf
   // FIXME: also report zone size?
 }
 
-void updateThread(const string& workdir, const uint16_t& keep, const uint16_t& axfrTimeout, const uint16_t& soaRetry) {
+void updateThread(const string& workdir, const uint16_t& keep, const uint16_t& axfrTimeout, const uint16_t& soaRetry, const uint32_t axfrMaxRecords) {
   setThreadName("ixfrdist/update");
   std::map<DNSName, time_t> lastCheck;
 
@@ -282,16 +282,18 @@ void updateThread(const string& workdir, const uint16_t& keep, const uint16_t& a
     string dir = workdir + "/" + domain.toString();
     try {
       g_log<<Logger::Info<<"Trying to initially load domain "<<domain<<" from disk"<<endl;
-      auto serial = getSerialsFromDir(dir);
+      auto serial = getSerialFromDir(dir);
       shared_ptr<SOARecordContent> soa;
       uint32_t soaTTL;
       {
         string fname = workdir + "/" + domain.toString() + "/" + std::to_string(serial);
         loadSOAFromDisk(domain, fname, soa, soaTTL);
         records_t records;
-        if (soa != nullptr) {
-          loadZoneFromDisk(records, fname, domain);
+        if (soa == nullptr) {
+          g_log<<Logger::Error<<"Could not load SOA from disk for zone "<<domain<<", removing file '"<<fname<<"'"<<endl;
+          unlink(fname.c_str());
         }
+        loadZoneFromDisk(records, fname, domain);
         auto zoneInfo = std::make_shared<ixfrinfo_t>();
         zoneInfo->latestAXFR = std::move(records);
         zoneInfo->soa = soa;
@@ -308,7 +310,7 @@ void updateThread(const string& workdir, const uint16_t& keep, const uint16_t& a
       g_log<<Logger::Info<<e.what()<<", attempting to create"<<endl;
       // Attempt to create it, if _that_ fails, there is no hope
       if (mkdir(dir.c_str(), 0777) == -1 && errno != EEXIST) {
-        g_log<<Logger::Error<<"Could not create '"<<dir<<"': "<<strerror(errno)<<endl;
+        g_log<<Logger::Error<<"Could not create '"<<dir<<"': "<<stringerror()<<endl;
         _exit(EXIT_FAILURE);
       }
     }
@@ -343,7 +345,7 @@ void updateThread(const string& workdir, const uint16_t& keep, const uint16_t& a
 
       // TODO Keep track of 'down' masters
       set<ComboAddress>::const_iterator it(domainConfig.second.masters.begin());
-      std::advance(it, random() % domainConfig.second.masters.size());
+      std::advance(it, dns_random(domainConfig.second.masters.size()));
       ComboAddress master = *it;
 
       string dir = workdir + "/" + domain.toString();
@@ -377,7 +379,7 @@ void updateThread(const string& workdir, const uint16_t& keep, const uint16_t& a
       records_t records;
       try {
         AXFRRetriever axfr(master, domain, tt, &local);
-        unsigned int nrecords=0;
+        uint32_t nrecords=0;
         Resolver::res_t nop;
         vector<DNSRecord> chunk;
         time_t t_start = time(nullptr);
@@ -396,6 +398,9 @@ void updateThread(const string& workdir, const uint16_t& keep, const uint16_t& a
               soa = getRR<SOARecordContent>(dr);
               soaTTL = dr.d_ttl;
             }
+          }
+          if (axfrMaxRecords != 0 && nrecords > axfrMaxRecords) {
+            throw PDNSException("Received more than " + std::to_string(axfrMaxRecords) + " records in AXFR, aborted");
           }
           axfr_now = time(nullptr);
           if (axfr_now - t_start > axfrTimeout) {
@@ -425,27 +430,27 @@ void updateThread(const string& workdir, const uint16_t& keep, const uint16_t& a
         g_log<<Logger::Notice<<"Wrote zonedata for "<<domain<<" with serial "<<soa->d_st.serial<<" to "<<dir<<endl;
 
         const auto oldZoneInfo = getCurrentZoneInfo(domain);
-        auto zoneInfo = std::make_shared<ixfrinfo_t>();
+        auto ixfrInfo = std::make_shared<ixfrinfo_t>();
 
         if (oldZoneInfo && !oldZoneInfo->latestAXFR.empty()) {
           auto diff = std::make_shared<ixfrdiff_t>();
-          zoneInfo->ixfrDiffs = oldZoneInfo->ixfrDiffs;
+          ixfrInfo->ixfrDiffs = oldZoneInfo->ixfrDiffs;
           g_log<<Logger::Debug<<"Calculating diff for "<<domain<<endl;
           makeIXFRDiff(oldZoneInfo->latestAXFR, records, diff, oldZoneInfo->soa, oldZoneInfo->soaTTL, soa, soaTTL);
           g_log<<Logger::Debug<<"Calculated diff for "<<domain<<", we had "<<diff->removals.size()<<" removals and "<<diff->additions.size()<<" additions"<<endl;
-          zoneInfo->ixfrDiffs.push_back(std::move(diff));
+          ixfrInfo->ixfrDiffs.push_back(std::move(diff));
         }
 
         // Clean up the diffs
-        while (zoneInfo->ixfrDiffs.size() > keep) {
-          zoneInfo->ixfrDiffs.erase(zoneInfo->ixfrDiffs.begin());
+        while (ixfrInfo->ixfrDiffs.size() > keep) {
+          ixfrInfo->ixfrDiffs.erase(ixfrInfo->ixfrDiffs.begin());
         }
 
         g_log<<Logger::Debug<<"Zone "<<domain<<" previously contained "<<(oldZoneInfo ? oldZoneInfo->latestAXFR.size() : 0)<<" entries, "<<records.size()<<" now"<<endl;
-        zoneInfo->latestAXFR = std::move(records);
-        zoneInfo->soa = soa;
-        zoneInfo->soaTTL = soaTTL;
-        updateCurrentZoneInfo(domain, zoneInfo);
+        ixfrInfo->latestAXFR = std::move(records);
+        ixfrInfo->soa = soa;
+        ixfrInfo->soaTTL = soaTTL;
+        updateCurrentZoneInfo(domain, ixfrInfo);
       } catch (PDNSException &e) {
         g_stats.incrementAXFRFailures(domain);
         g_log<<Logger::Warning<<"Could not save zone '"<<domain<<"' to disk: "<<e.reason<<endl;
@@ -570,7 +575,7 @@ static bool addRecordToWriter(DNSPacketWriter& pw, const DNSName& zoneName, cons
 {
   pw.startRecord(record.d_name + zoneName, record.d_type, record.d_ttl, QClass::IN, DNSResourceRecord::ANSWER, compress);
   record.d_content->toPacket(pw);
-  if (pw.size() > 65535) {
+  if (pw.size() > 16384) {
     pw.rollback();
     return false;
   }
@@ -975,6 +980,16 @@ static bool parseAndCheckConfig(const string& configpath, YAML::Node& config) {
     config["keep"] = 20;
   }
 
+  if (config["axfr-max-records"]) {
+    try {
+      config["axfr-max-records"].as<uint32_t>();
+    } catch (const runtime_error &e) {
+      g_log<<Logger::Error<<"Unable to read 'axfr-max-records' value: "<<e.what()<<endl;
+    }
+  } else {
+    config["axfr-max-records"] = 0;
+  }
+
   if (config["axfr-timeout"]) {
     try {
       config["axfr-timeout"].as<uint16_t>();
@@ -1125,6 +1140,16 @@ static bool parseAndCheckConfig(const string& configpath, YAML::Node& config) {
     }
   }
 
+  if (config["webserver-loglevel"]) {
+    try {
+      config["webserver-loglevel"].as<string>();
+    }
+    catch (const runtime_error &e) {
+      g_log<<Logger::Error<<"Unable to read 'webserver-loglevel' value: "<<e.what()<<endl;
+      retval = false;
+    }
+  }
+
   return retval;
 }
 
@@ -1267,8 +1292,18 @@ int main(int argc, char** argv) {
       }
     }
 
+    string loglevel = "normal";
+    if (config["webserver-loglevel"]) {
+      loglevel = config["webserver-loglevel"].as<string>();
+    }
+
     // Launch the webserver!
-    std::thread(&IXFRDistWebServer::go, IXFRDistWebServer(config["webserver-address"].as<ComboAddress>(), wsACL)).detach();
+    try {
+      std::thread(&IXFRDistWebServer::go, IXFRDistWebServer(config["webserver-address"].as<ComboAddress>(), wsACL, loglevel)).detach();
+    } catch (const PDNSException &e) {
+      g_log<<Logger::Error<<"Unable to start webserver: "<<e.reason<<endl;
+      had_error = true;
+    }
   }
 
   int newuid = 0;
@@ -1324,7 +1359,8 @@ int main(int argc, char** argv) {
       config["work-dir"].as<string>(),
       config["keep"].as<uint16_t>(),
       config["axfr-timeout"].as<uint16_t>(),
-      config["failed-soa-retry"].as<uint16_t>());
+      config["failed-soa-retry"].as<uint16_t>(),
+      config["axfr-max-records"].as<uint32_t>());
 
   vector<std::thread> tcpHandlers;
   tcpHandlers.reserve(config["tcp-in-threads"].as<uint16_t>());

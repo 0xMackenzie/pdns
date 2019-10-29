@@ -27,7 +27,6 @@
 #include "dnsproxy.hh"
 #include "pdnsexception.hh"
 #include <sys/types.h>
-#include <errno.h>
 #include "dns.hh"
 #include "logger.hh"
 #include "statbag.hh"
@@ -50,7 +49,7 @@ DNSProxy::DNSProxy(const string &remote)
   d_remote = ComboAddress(addresses[0], 53);
 
   if((d_sock=socket(d_remote.sin4.sin_family, SOCK_DGRAM,0))<0) {
-    throw PDNSException(string("socket: ")+strerror(errno));
+    throw PDNSException(string("socket: ")+stringerror());
   }
 
   ComboAddress local;
@@ -71,14 +70,14 @@ DNSProxy::DNSProxy(const string &remote)
   if(n==10) {
     closesocket(d_sock);
     d_sock=-1;
-    throw PDNSException(string("binding dnsproxy socket: ")+strerror(errno));
+    throw PDNSException(string("binding dnsproxy socket: ")+stringerror());
   }
 
   if(connect(d_sock, (sockaddr *)&d_remote, d_remote.getSocklen())<0) {
     throw PDNSException("Unable to UDP connect to remote nameserver "+d_remote.toStringWithPort()+": "+stringerror());
   }
 
-  d_xor=dns_random(0xffff);
+  d_xor=dns_random_uint16();
   g_log<<Logger::Error<<"DNS Proxy launched, local port "<<ntohs(local.sin4.sin_port)<<", remote "<<d_remote.toStringWithPort()<<endl;
 } 
 
@@ -89,7 +88,7 @@ void DNSProxy::go()
 }
 
 //! look up qname target with r->qtype, plonk it in the answer section of 'r' with name aname
-bool DNSProxy::completePacket(DNSPacket *r, const DNSName& target,const DNSName& aname, const uint8_t scopeMask)
+bool DNSProxy::completePacket(std::unique_ptr<DNSPacket>& r, const DNSName& target,const DNSName& aname, const uint8_t scopeMask)
 {
   if(r->d_tcp) {
     vector<DNSZoneRecord> ips;
@@ -128,6 +127,7 @@ bool DNSProxy::completePacket(DNSPacket *r, const DNSName& target,const DNSName&
   }
 
   uint16_t id;
+  uint16_t qtype = r->qtype.getCode();
   {
     Lock l(&d_lock);
     id=getID_locked();
@@ -140,14 +140,14 @@ bool DNSProxy::completePacket(DNSPacket *r, const DNSName& target,const DNSName&
     ce.qtype = r->qtype.getCode();
     ce.qname = target;
     ce.anyLocal = r->d_anyLocal;
-    ce.complete = r;
+    ce.complete = std::move(r);
     ce.aname=aname;
     ce.anameScopeMask = scopeMask;
-    d_conntrack[id]=ce;
+    d_conntrack[id]=std::move(ce);
   }
 
   vector<uint8_t> packet;
-  DNSPacketWriter pw(packet, target, r->qtype.getCode());
+  DNSPacketWriter pw(packet, target, qtype);
   pw.getHeader()->rd=true;
   pw.getHeader()->id=id ^ d_xor;
 
@@ -174,7 +174,7 @@ int DNSProxy::getID_locked()
         g_log<<Logger::Warning<<"Recursive query for remote "<<
           i->second.remote.toStringWithPort()<<" with internal id "<<n<<
           " was not answered by backend within timeout, reusing id"<<endl;
-	delete i->second.complete;
+	i->second.complete.reset();
 	S.inc("recursion-unanswered");
       }
       return n;
@@ -191,7 +191,7 @@ void DNSProxy::mainloop(void)
 
     struct msghdr msgh;
     struct iovec iov;
-    char cbuf[256];
+    cmsgbuf_aligned cbuf;
     ComboAddress fromaddr;
 
     for(;;) {
@@ -275,8 +275,7 @@ void DNSProxy::mainloop(void)
         reply=i->second.complete->getString();
         iov.iov_base = (void*)reply.c_str();
         iov.iov_len = reply.length();
-        delete i->second.complete;
-        i->second.complete=0;
+        i->second.complete.reset();
         msgh.msg_iov = &iov;
         msgh.msg_iovlen = 1;
         msgh.msg_name = (struct sockaddr*)&i->second.remote;
@@ -284,11 +283,12 @@ void DNSProxy::mainloop(void)
         msgh.msg_control=NULL;
 
         if(i->second.anyLocal) {
-          addCMsgSrcAddr(&msgh, cbuf, i->second.anyLocal.get_ptr(), 0);
+          addCMsgSrcAddr(&msgh, &cbuf, i->second.anyLocal.get_ptr(), 0);
         }
-        if(sendmsg(i->second.outsock, &msgh, 0) < 0)
-          g_log<<Logger::Warning<<"dnsproxy.cc: Error sending reply with sendmsg (socket="<<i->second.outsock<<"): "<<strerror(errno)<<endl;
-
+        if(sendmsg(i->second.outsock, &msgh, 0) < 0) {
+          int err = errno;
+          g_log<<Logger::Warning<<"dnsproxy.cc: Error sending reply with sendmsg (socket="<<i->second.outsock<<"): "<<stringerror(err)<<endl;
+        }
         i->second.created=0;
       }
     }

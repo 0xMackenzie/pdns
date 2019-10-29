@@ -23,10 +23,6 @@ start_master ()
 				source ./backends/godbc_sqlite3-master
 				;;
 
-			goracle*)
-				source ./backends/goracle-master
-				;;
-
 			gpgsql*)
 				source ./backends/gpgsql-master
 				;;
@@ -35,16 +31,12 @@ start_master ()
 				source ./backends/gsqlite3-master
 				;;
 
-			mydns*)
-				source ./backends/mydns-master
+			lmdb*)
+				source ./backends/lmdb-master
 				;;
 
 			opendbx*)
 				source ./backends/opendbx-master
-				;;
-
-			oracle*)
-				source ./backends/oracle-master
 				;;
 
 			remote*)
@@ -69,6 +61,10 @@ start_master ()
 
 			ext-bind*)
 				source ./ext/bind-master
+				;;
+
+			lua*)
+				source ./backends/lua-master
 				;;
 
 			*)
@@ -105,10 +101,6 @@ start_slave ()
 			source ./backends/godbc_mssql-slave
 			;;
 
-		goracle*)
-			source ./backends/goracle-slave
-			;;
-
 		gpgsql*)
 		source ./backends/gpgsql-slave
 			;;
@@ -117,8 +109,8 @@ start_slave ()
 			source ./backends/gsqlite3-slave
 			;;
 
-		oracle*)
-			source ./backends/oracle-slave
+		lmdb*)
+			source ./backends/lmdb-slave
 			;;
 
 		ext-bind*)

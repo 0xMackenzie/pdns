@@ -1,6 +1,4 @@
-#ifndef _YAHTTP_UTILITY_HPP
-#define _YAHTTP_UTILITY_HPP 1
-
+#pragma once
 namespace YaHTTP {
   static const char *MONTHS[] = {0,"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec",0}; //<! List of months 
   static const char *DAYS[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat",0}; //<! List of days
@@ -72,7 +70,8 @@ namespace YaHTTP {
        fromTm(&tm);
 #else
        struct tm *tm;
-       tm = localtime(&t);
+       #error define HAVE_LOCALTIME_R
+       tm = localtime(&t); // lgtm [cpp/potentially-dangerous-function]
        fromTm(tm);
 #endif
 #ifndef HAVE_TM_GMTOFF
@@ -81,7 +80,8 @@ namespace YaHTTP {
        gmtime_r(&t, &tm);
        t2 = mktime(&tm);
 # else
-       tm = gmtime(&t);
+       #error define HAVE_LOCALTIME_R
+       tm = gmtime(&t); // lgtm [cpp/potentially-dangerous-function]
        t2 = mktime(tm);
 # endif
        this->utc_offset = ((t2-t)/10)*10; // removes any possible differences. 
@@ -95,7 +95,8 @@ namespace YaHTTP {
        fromTm(&tm);
 #else
        struct tm *tm;
-       tm = gmtime(&t);
+       #error define HAVE_GMTIME_R
+       tm = gmtime(&t);// lgtm [cpp/potentially-dangerous-function]
        fromTm(tm);
 #endif
 #ifndef HAVE_TM_GMTOFF
@@ -459,4 +460,3 @@ namespace YaHTTP {
    }; //<! camelizes headers, such as, content-type => Content-Type
   };
 };
-#endif

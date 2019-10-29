@@ -20,7 +20,6 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #pragma once
-#include <errno.h>
 #include <inttypes.h>
 #include <cstring>
 #include <cstdio>
@@ -112,7 +111,9 @@ stringtok (Container &container, string const &in,
 
 template<typename T> bool rfc1982LessThan(T a, T b)
 {
-  return ((signed)(a - b)) < 0;
+  static_assert(std::is_unsigned<T>::value, "rfc1982LessThan only works for unsigned types");
+  typedef typename std::make_signed<T>::type signed_t;
+  return static_cast<signed_t>(a - b) < 0;
 }
 
 // fills container with ranges, so {posbegin,posend}
@@ -155,15 +156,13 @@ const string toLower(const string &upper);
 const string toLowerCanonic(const string &upper);
 bool IpToU32(const string &str, uint32_t *ip);
 string U32ToIP(uint32_t);
+string stringerror(int);
 string stringerror();
-string netstringerror();
 string itoa(int i);
 string uitoa(unsigned int i);
 string bitFlip(const string &str);
 
 void dropPrivs(int uid, int gid);
-int makeGidNumeric(const string &group);
-int makeUidNumeric(const string &user);
 void cleanSlashes(string &str);
 
 #if defined(_POSIX_THREAD_CPUTIME) && defined(CLOCK_THREAD_CPUTIME_ID)
@@ -192,7 +191,8 @@ class DTime
 {
 public:
   DTime(); //!< Does not set the timer for you! Saves lots of gettimeofday() calls
-  DTime(const DTime &dt);
+  DTime(const DTime &dt) = default;
+  DTime & operator=(const DTime &dt) = default;
   time_t time();
   inline void set();  //!< Reset the timer
   inline int udiff(); //!< Return the number of microseconds since the timer was last set.
@@ -283,7 +283,7 @@ inline double getTime()
 
 inline void unixDie(const string &why)
 {
-  throw runtime_error(why+": "+strerror(errno));
+  throw runtime_error(why+": "+stringerror());
 }
 
 string makeHexDump(const string& str);
@@ -517,8 +517,12 @@ private:
 };
 
 union ComboAddress;
+
+// An aligned type to hold cmsgbufs. See https://man.openbsd.org/CMSG_DATA
+typedef union { struct cmsghdr hdr; char buf[256]; } cmsgbuf_aligned;
+
 /* itfIndex is an interface index, as returned by if_nametoindex(). 0 means default. */
-void addCMsgSrcAddr(struct msghdr* msgh, void* cmsgbuf, const ComboAddress* source, int itfIndex);
+void addCMsgSrcAddr(struct msghdr* msgh, cmsgbuf_aligned* cbuf, const ComboAddress* source, int itfIndex);
 
 unsigned int getFilenumLimit(bool hardOrSoft=0);
 void setFilenumLimit(unsigned int lim);
@@ -534,11 +538,16 @@ bool setNonBlocking( int sock );
 bool setTCPNoDelay(int sock);
 bool setReuseAddr(int sock);
 bool isNonBlocking(int sock);
+bool setReceiveSocketErrors(int sock, int af);
 int closesocket(int fd);
 bool setCloseOnExec(int sock);
-uint64_t udpErrorStats(const std::string& str);
 
+size_t getPipeBufferSize(int fd);
+bool setPipeBufferSize(int fd, size_t size);
+
+uint64_t udpErrorStats(const std::string& str);
 uint64_t getRealMemoryUsage(const std::string&);
+uint64_t getSpecialMemoryUsage(const std::string&);
 uint64_t getOpenFileDescriptors(const std::string&);
 uint64_t getCPUTimeUser(const std::string&);
 uint64_t getCPUTimeSystem(const std::string&);

@@ -47,29 +47,27 @@ public:
     if(d_rsock.write((char *) &len, 2) != 2)
       throw PDNSException("tcp write failed");
 
-    d_rsock.writen(string((char*)&*packet.begin(), (char*)&*packet.end()));
+    d_rsock.writen(string(packet.begin(), packet.end()));
     
     int bread=d_rsock.read((char *) &len, 2);
     if( bread <0)
-      throw PDNSException("tcp read failed: "+std::string(strerror(errno)));
+      throw PDNSException("tcp read failed: "+stringerror());
     if(bread != 2) 
       throw PDNSException("EOF on TCP read");
 
     len=ntohs(len);
-    char *creply = new char[len];
+    std::unique_ptr<char[]> creply(new char[len]);
     int n=0;
     int numread;
     while(n<len) {
-      numread=d_rsock.read(creply+n, len-n);
+      numread=d_rsock.read(creply.get()+n, len-n);
       if(numread<0) {
-        delete[] creply;
-        throw PDNSException("tcp read failed: "+std::string(strerror(errno)));
+        throw PDNSException("tcp read failed: "+stringerror());
       }
       n+=numread;
     }
 
-    string reply(creply, len);
-    delete[] creply;
+    string reply(creply.get(), len);
 
     return reply;
   }

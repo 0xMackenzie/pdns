@@ -57,7 +57,7 @@ try
  
     if(msg.empty()) {
       typedef map<string,string> all_t;
-      all_t all=getAllStatsMap();
+      all_t all=getAllStatsMap(StatComponent::Carbon);
       
       ostringstream str;
       time_t now=time(0);
@@ -70,7 +70,7 @@ try
 
     int ret=asendtcp(msg, &s);     // this will actually do the right thing waiting on the connect
     if(ret < 0)
-      g_log<<Logger::Warning<<"Error writing carbon data to "<<remote.toStringWithPort()<<": "<<strerror(errno)<<endl;
+      g_log<<Logger::Warning<<"Error writing carbon data to "<<remote.toStringWithPort()<<": "<<stringerror()<<endl;
     if(ret==0)
       g_log<<Logger::Warning<<"Timeout connecting/writing carbon data to "<<remote.toStringWithPort()<<endl;
   }
